@@ -14,6 +14,6 @@ parameter ADDR_SPHERE_R   = 4'hC; // Register 3
 // 3. Display Configuration
 parameter SCREEN_WIDTH    = 640;
 parameter SCREEN_HEIGHT   = 480;
-parameter COLOR_DEPTH     = 24; // 8-bit R, 8-bit G, 8-bit B
+parameter COLOR_DEPTH     = 16; // 5-bit R, 6-bit G, 5-bit B
 
 `endif
