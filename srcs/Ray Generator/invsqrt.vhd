@@ -126,7 +126,7 @@ process (clk)
                     rootdone <= '1';                                                                                 
                 end if;
 
-                -- calculating 1 newton iteration and giving the output: 6 clock cycles
+                -- calculating 1 newton-raphson iteration and giving the output: 6 clock cycles
                 else
                     if floating = x"00000000" then
                         ans<=x"ffffffff";
