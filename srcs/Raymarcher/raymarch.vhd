@@ -23,7 +23,7 @@ entity raymarch is
         hit_x      : out sfixed(5 downto -12);
         hit_y      : out sfixed(5 downto -12);
         hit_z      : out sfixed(5 downto -12);
-        hit_t      : out sfixed(5 downto -12)     -- total march distance along ray
+        march_t      : out sfixed(5 downto -12)     -- total march distance along ray
     );
 end raymarch;
 
@@ -269,7 +269,7 @@ begin
                         hit_x  <= curr_x;
                         hit_y  <= curr_y;
                         hit_z  <= curr_z;
-                        hit_t  <= t;
+                        march_t  <= t;
                         done   <= '1';
                         state  <= IDLE;
 
