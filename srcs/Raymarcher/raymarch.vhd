@@ -23,7 +23,7 @@ entity raymarch is
         hit_x      : out sfixed(5 downto -12);
         hit_y      : out sfixed(5 downto -12);
         hit_z      : out sfixed(5 downto -12);
-        hit_t      : out sfixed(5 downto -12);
+        march_t      : out sfixed(5 downto -12);
         -- surface normal at hit point             [Q2.16 — sfixed(1 downto -16) — 18-bit]
         norm_x     : out sfixed(1 downto -16);
         norm_y     : out sfixed(1 downto -16);
@@ -286,7 +286,7 @@ begin
                     hit_x  <= curr_x;
                     hit_y  <= curr_y;
                     hit_z  <= curr_z;
-                    hit_t  <= t;
+                    march_t  <= t;
                     if obj_reg = "001" then
                         norm_x <= norm_sphere_x;
                         norm_y <= norm_sphere_y;
