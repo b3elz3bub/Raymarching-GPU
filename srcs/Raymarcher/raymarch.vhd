@@ -12,7 +12,7 @@ entity raymarch is
         ray_orig_x : in  sfixed(5 downto -12);
         ray_orig_y : in  sfixed(5 downto -12);
         ray_orig_z : in  sfixed(5 downto -12);
-        -- inputs from Person 2 (ray direction)   [Q2.16 — sfixed(1 downto -16) — 18-bit, locked]
+        -- inputs from Person 2 (ray direction)   [Q2.16 — sfixed(1 downto -16) — 18-bit]
         ray_dir_x  : in  sfixed(1 downto -16);
         ray_dir_y  : in  sfixed(1 downto -16);
         ray_dir_z  : in  sfixed(1 downto -16);
@@ -23,7 +23,7 @@ entity raymarch is
         hit_x      : out sfixed(5 downto -12);
         hit_y      : out sfixed(5 downto -12);
         hit_z      : out sfixed(5 downto -12);
-        march_t      : out sfixed(5 downto -12);     -- total march distance along ray
+        hit_t      : out sfixed(5 downto -12);
         -- surface normal at hit point             [Q2.16 — sfixed(1 downto -16) — 18-bit]
         norm_x     : out sfixed(1 downto -16);
         norm_y     : out sfixed(1 downto -16);
@@ -35,10 +35,10 @@ architecture Behavioral of raymarch is
 
     -- ─────────────────────────────────────────────────────────
     -- TYPES
-    --   pos_t  Q6.12   sfixed(5  downto -12)  18-bit  positions, distances, d values, t
+    --   pos_t  Q6.12   sfixed(5  downto -12)  18-bit  positions, distances
     --   dir_t  Q2.16   sfixed(1  downto -16)  18-bit  ray directions, normals
-    --   sos_t  Q12.6   sfixed(11 downto  -6)  18-bit  sum-of-squares  (range up to ~1200)
-    --   inv_t  Q4.14   sfixed(3  downto -14)  18-bit  invsqrt output  (range 0..8, floor 1/64)
+    --   sos_t  Q12.6   sfixed(11 downto  -6)  18-bit  sum-of-squares
+    --   inv_t  Q4.14   sfixed(3  downto -14)  18-bit  invsqrt output
     -- ─────────────────────────────────────────────────────────
     subtype pos_t is sfixed(5  downto -12);
     subtype dir_t is sfixed(1  downto -16);
@@ -46,161 +46,121 @@ architecture Behavioral of raymarch is
     subtype inv_t is sfixed(3  downto -14);
 
     -- ─────────────────────────────────────────────────────────
-    -- CONSTANTS                              (all in pos_t / Q6.12)
+    -- CONSTANTS
     -- ─────────────────────────────────────────────────────────
     constant ONE      : pos_t := to_sfixed( 1.0,    5, -12);
     constant RADIUS   : pos_t := to_sfixed( 1.0,    5, -12);
-    constant HIT_DIST : pos_t := to_sfixed( 0.005,  5, -12);  -- ~4.88e-3 (nearest Q6.12)
+    constant HIT_DIST : pos_t := to_sfixed( 0.005,  5, -12);
     constant MAX_DIST : pos_t := to_sfixed(20.0,    5, -12);
 
-    -- sphere center at (0, 0, 0)
-    -- sits on plane y = -1  because center_y(0) - radius(1) = -1
+    -- sphere center
     constant SP_X : pos_t := to_sfixed(0.0, 5, -12);
     constant SP_Y : pos_t := to_sfixed(0.0, 5, -12);
     constant SP_Z : pos_t := to_sfixed(0.0, 5, -12);
 
-    -- plane normal (constant, always pointing up)
+    -- plane normal (constant, always up)
     constant PLANE_NX : dir_t := to_sfixed(0.0, 1, -16);
     constant PLANE_NY : dir_t := to_sfixed(1.0, 1, -16);
     constant PLANE_NZ : dir_t := to_sfixed(0.0, 1, -16);
 
+    -- Range-reduction thresholds for invsqrt (max input = 7)
+    --   SOS_LO  = 7       : invsqrt works directly for sum_sq ≤ 7
+    --   SOS_HI  = 7 × 64  = 448 : after ÷64 (shift-right 6), input ≤ 7
+    --   > 448 means sphere > √448 − 1 ≈ 20.2 units away → safe fallback
+    constant SOS_LO : sos_t := to_sfixed(  7.0, 11, -6);
+    constant SOS_HI : sos_t := to_sfixed(448.0, 11, -6);
+
+    -- Fallback d_sphere when sum_sq > 448 (true d_sphere > 20.2)
+    constant FAR_SPHERE : pos_t := to_sfixed(20.0, 5, -12);
+
     -- ─────────────────────────────────────────────────────────
-    -- COMPONENT — invsqrt block
-    --   Input  x   : sos_t  sfixed(11 downto -6)   Q12.6   18-bit
-    --   Output ans : inv_t  sfixed(3  downto -14)  Q4.14   18-bit
-    -- !! adjust port names to match the actual entity !!
+    -- COMPONENT — invsqrt block (Person 2, accurate for input ≤ 7)
     -- ─────────────────────────────────────────────────────────
     component invsqrt
         Port (
             clk   : in  std_logic;
             start : in  std_logic;
-            x     : in  sfixed(11 downto -6);    -- sum-of-squares in Q12.6
-            ans   : out sfixed(3  downto -14);   -- 1/sqrt(x) in Q4.14
+            x     : in  sfixed(11 downto -6);
+            ans   : out sfixed(3  downto -14);
             done  : out std_logic
         );
     end component;
 
     -- ─────────────────────────────────────────────────────────
-    -- FUNCTIONS
-    --   Every multiply is exactly 18 × 18 bits → single DSP block
+    -- MULTIPLY FUNCTIONS  (each 18 × 18 → single DSP block)
     -- ─────────────────────────────────────────────────────────
-
-    -- pos × pos → pos   used in sum_of_sq for dx*dx, dy*dy, dz*dz
     function fp_mul_pos(a : pos_t; b : pos_t) return pos_t is
-    begin
-        return resize(a * b, 5, -12);
-    end function;
+    begin return resize(a * b, 5, -12); end function;
 
-    -- dir × pos → pos   used in CHECK_HIT to advance: ray_dir * d_min
     function fp_mul_dir(a : dir_t; b : pos_t) return pos_t is
-    begin
-        return resize(a * b, 5, -12);
-    end function;
+    begin return resize(a * b, 5, -12); end function;
 
-    -- sos × inv → pos   used in WAIT_INVSQRT: sum_sq * invsqrt_out = sqrt(sum_sq)
     function fp_mul_sos(a : sos_t; b : inv_t) return pos_t is
-    begin
-        return resize(a * b, 5, -12);
-    end function;
+    begin return resize(a * b, 5, -12); end function;
 
-    -- pos × inv → dir   used for sphere normal: (p - center) * (1/||p - center||)
     function fp_mul_norm(a : pos_t; b : inv_t) return dir_t is
-    begin
-        return resize(a * b, 1, -16);
-    end function;
+    begin return resize(a * b, 1, -16); end function;
 
     -- ─────────────────────────────────────────────────────────
     -- SCENE FUNCTIONS
     -- ─────────────────────────────────────────────────────────
-
-    -- sdf_plane — combinational; distance = py - (-1) = py + 1
     function sdf_plane(py : pos_t) return pos_t is
-    begin
-        return resize(py + ONE, 5, -12);
-    end function;
+    begin return resize(py + ONE, 5, -12); end function;
 
-    -- sum_of_sq — combinational; returns dx²+dy²+dz² in sos_t (Q12.6)
-    -- output is sos_t (not pos_t) because squaring inflates the integer range
     function sum_of_sq(px, py, pz : pos_t) return sos_t is
         variable dx, dy, dz : pos_t;
     begin
         dx := resize(px - SP_X, 5, -12);
         dy := resize(py - SP_Y, 5, -12);
         dz := resize(pz - SP_Z, 5, -12);
-        -- each fp_mul_pos returns pos_t; VHDL fixed_pkg widens sum naturally
-        -- final resize to sos_t (11 downto -6) keeps the enlarged integer range
         return resize(fp_mul_pos(dx,dx) + fp_mul_pos(dy,dy) + fp_mul_pos(dz,dz), 11, -6);
     end function;
 
     -- ─────────────────────────────────────────────────────────
-    -- STATE MACHINE STATES
+    -- STATE MACHINE
     -- ─────────────────────────────────────────────────────────
-    type state_t is (
-        IDLE,           -- waiting for start
-        INIT,           -- load ray into registers
-        COMPUTE_SOS,    -- compute sum of squares + plane SDF, fire invsqrt
-        WAIT_INVSQRT,   -- wait for invsqrt block to finish
-        EVAL_SDF,       -- pick minimum of d_sphere and d_plane
-        CHECK_HIT,      -- hit / miss / continue decision
-        OUTPUT_RESULT   -- drive output ports, assert done
-    );
+    type state_t is (IDLE, INIT, COMPUTE_SOS, WAIT_INVSQRT,
+                     EVAL_SDF, CHECK_HIT, OUTPUT_RESULT);
     signal state : state_t := IDLE;
 
-    -- ─────────────────────────────────────────────────────────
-    -- SIGNALS
-    -- ─────────────────────────────────────────────────────────
-
-    -- current march point
-    signal curr_x : pos_t := (others => '0');
-    signal curr_y : pos_t := (others => '0');
-    signal curr_z : pos_t := (others => '0');
-
-    -- total distance marched along the ray
-    signal t      : pos_t := (others => '0');
-
-    -- step counter (0–63)
+    -- current march point & total distance
+    signal curr_x, curr_y, curr_z : pos_t := (others => '0');
+    signal t          : pos_t := (others => '0');
     signal step_count : unsigned(5 downto 0) := (others => '0');
 
     -- invsqrt interface
     signal invsqrt_start : std_logic := '0';
-    signal invsqrt_in    : sos_t     := (others => '0');  -- Q12.6
-    signal invsqrt_out   : inv_t     := (others => '0');  -- Q4.14
+    signal invsqrt_in    : sos_t     := (others => '0');
+    signal invsqrt_out   : inv_t     := (others => '0');
     signal invsqrt_done  : std_logic;
 
-    -- intermediate SDF results
-    signal d_plane  : pos_t := (others => '0');
-    signal d_sphere : pos_t := (others => '0');
-    signal d_min    : pos_t := (others => '0');
-    signal sum_sq   : sos_t := (others => '0');  -- Q12.6, stored for the multiply-back
+    -- SDF intermediates
+    signal d_plane, d_sphere, d_min : pos_t := (others => '0');
+    signal sum_sq : sos_t := (others => '0');
 
-    -- internal result registers
-    signal hit_reg : std_logic         := '0';
+    -- result registers
+    signal hit_reg : std_logic            := '0';
     signal obj_reg : unsigned(2 downto 0) := (others => '0');
 
-    -- sphere normal (computed optimistically every step; valid at hit)
-    signal norm_sphere_x : dir_t := (others => '0');
-    signal norm_sphere_y : dir_t := (others => '0');
-    signal norm_sphere_z : dir_t := (others => '0');
+    -- sphere normal (computed in WAIT_INVSQRT, valid at hit)
+    signal norm_sphere_x, norm_sphere_y, norm_sphere_z : dir_t := (others => '0');
+
+    -- Range-reduction flag: '1' when sum_sq was divided by 64 before invsqrt.
+    -- In WAIT_INVSQRT, if scaled='1', we shift_right the output by 3 to compensate.
+    signal scaled : std_logic := '0';
 
 begin
 
-    -- ─────────────────────────────────────────────────────────
-    -- INVSQRT INSTANTIATION
-    -- ─────────────────────────────────────────────────────────
     INVSQRT_UNIT : invsqrt
-        port map (
-            clk   => clk,
-            start => invsqrt_start,
-            x     => invsqrt_in,    -- sos_t  sfixed(11 downto -6)
-            ans   => invsqrt_out,   -- inv_t  sfixed(3  downto -14)
-            done  => invsqrt_done
-        );
+        port map (clk => clk, start => invsqrt_start,
+                  x => invsqrt_in, ans => invsqrt_out, done => invsqrt_done);
 
     -- ─────────────────────────────────────────────────────────
-    -- STATE MACHINE
+    -- MAIN PROCESS
     -- ─────────────────────────────────────────────────────────
     process(clk)
-        variable v_sq : sos_t;  -- single compute of sum_of_sq per step
+        variable v_sq  : sos_t;   -- single compute of sum_of_sq
+        variable v_inv : inv_t;   -- corrected 1/sqrt(sum_sq)
     begin
         if rising_edge(clk) then
             if rst = '1' then
@@ -211,109 +171,133 @@ begin
                 norm_x        <= (others => '0');
                 norm_y        <= (others => '0');
                 norm_z        <= (others => '0');
-
             else
                 case state is
 
-                    -- ── IDLE ─────────────────────────────────
-                    when IDLE =>
-                        done          <= '0';
+                -- ── IDLE ─────────────────────────────────────
+                when IDLE =>
+                    done          <= '0';
+                    invsqrt_start <= '0';
+                    if start = '1' then
+                        state <= INIT;
+                    end if;
+
+                -- ── INIT ─────────────────────────────────────
+                when INIT =>
+                    curr_x     <= ray_orig_x;
+                    curr_y     <= ray_orig_y;
+                    curr_z     <= ray_orig_z;
+                    t          <= to_sfixed(0.0, 5, -12);
+                    step_count <= (others => '0');
+                    hit_reg    <= '0';
+                    state      <= COMPUTE_SOS;
+
+                -- ── COMPUTE_SOS ──────────────────────────────
+                -- Three cases based on sum_sq:
+                --   ≤ 7   : feed directly to invsqrt (near sphere)
+                --   7–448 : divide by 64 (shift right 6), then invsqrt
+                --   > 448 : sphere > 20 units away, skip invsqrt
+                when COMPUTE_SOS =>
+                    v_sq    := sum_of_sq(curr_x, curr_y, curr_z);
+                    d_plane <= sdf_plane(curr_y);
+                    sum_sq  <= v_sq;
+
+                    if v_sq > SOS_HI then
+                        -- Far: sphere > ~21 units away, skip invsqrt
+                        d_sphere      <= FAR_SPHERE;
                         invsqrt_start <= '0';
-                        if start = '1' then
-                            state <= INIT;
-                        end if;
+                        scaled        <= '0';
+                        state         <= EVAL_SDF;
 
-                    -- ── INIT ─────────────────────────────────
-                    when INIT =>
-                        curr_x     <= ray_orig_x;
-                        curr_y     <= ray_orig_y;
-                        curr_z     <= ray_orig_z;
-                        t          <= to_sfixed(0.0, 5, -12);
-                        step_count <= (others => '0');
-                        hit_reg    <= '0';
-                        state      <= COMPUTE_SOS;
-
-                    -- ── COMPUTE_SOS ───────────────────────────
-                    -- plane SDF is free (addition only)
-                    -- sum_of_sq computed once via variable, feeds register + invsqrt
-                    when COMPUTE_SOS =>
-                        v_sq          := sum_of_sq(curr_x, curr_y, curr_z);
-                        d_plane       <= sdf_plane(curr_y);
-                        sum_sq        <= v_sq;
-                        invsqrt_in    <= v_sq;
+                    elsif v_sq > SOS_LO then
+                        -- Mid-range: scale down by 64 so input ∈ [0.11, 7]
+                        invsqrt_in    <= shift_right(v_sq, 6);
                         invsqrt_start <= '1';
+                        scaled        <= '1';
                         state         <= WAIT_INVSQRT;
 
-                    -- ── WAIT_INVSQRT ─────────────────────────
-                    -- sqrt(sum_sq) = sum_sq * (1/sqrt(sum_sq))
-                    -- fp_mul_sos: sos_t(18) × inv_t(18) → pos_t(18)  — single DSP
-                    -- sphere normal computed here: n = (p - center) * invsqrt_out
-                    -- fp_mul_norm: pos_t(18) × inv_t(18) → dir_t(18) — single DSP each
-                    when WAIT_INVSQRT =>
-                        invsqrt_start <= '0';
-                        if invsqrt_done = '1' then
-                            d_sphere      <= resize(fp_mul_sos(sum_sq, invsqrt_out) - RADIUS, 5, -12);
-                            -- sphere normal = normalize(p - center) = (p - center) / |p - center|
-                            -- invsqrt_out already holds 1/|p - center|, so just multiply
-                            norm_sphere_x <= fp_mul_norm(resize(curr_x - SP_X, 5, -12), invsqrt_out);
-                            norm_sphere_y <= fp_mul_norm(resize(curr_y - SP_Y, 5, -12), invsqrt_out);
-                            norm_sphere_z <= fp_mul_norm(resize(curr_z - SP_Z, 5, -12), invsqrt_out);
-                            state         <= EVAL_SDF;
+                    else
+                        -- Near sphere: input already ≤ 7, use directly
+                        invsqrt_in    <= v_sq;
+                        invsqrt_start <= '1';
+                        scaled        <= '0';
+                        state         <= WAIT_INVSQRT;
+                    end if;
+
+                -- ── WAIT_INVSQRT ─────────────────────────────
+                -- If scaled='1', invsqrt returned 1/√(sum_sq/64) = 8/√(sum_sq).
+                -- Shift right by 3 to recover the true 1/√(sum_sq).
+                -- If scaled='0', output is already 1/√(sum_sq).
+                when WAIT_INVSQRT =>
+                    invsqrt_start <= '0';
+                    if invsqrt_done = '1' then
+                        -- Compensate for range reduction
+                        if scaled = '1' then
+                            v_inv := shift_right(invsqrt_out, 3);
+                        else
+                            v_inv := invsqrt_out;
                         end if;
 
-                    -- ── EVAL_SDF ──────────────────────────────
-                    when EVAL_SDF =>
-                        if d_sphere < d_plane then
-                            d_min   <= d_sphere;
-                            obj_reg <= "001";   -- sphere = obj 1
-                        else
-                            d_min   <= d_plane;
-                            obj_reg <= "000";   -- plane  = obj 0
-                        end if;
-                        state <= CHECK_HIT;
+                        -- d_sphere = √(sum_sq) − R = sum_sq × (1/√sum_sq) − R
+                        d_sphere <= resize(fp_mul_sos(sum_sq, v_inv) - RADIUS, 5, -12);
 
-                    -- ── CHECK_HIT ─────────────────────────────
-                    when CHECK_HIT =>
-                        if d_min < HIT_DIST then
-                            hit_reg <= '1';
-                            state   <= OUTPUT_RESULT;
-                        elsif t > MAX_DIST then
-                            hit_reg <= '0';
-                            state   <= OUTPUT_RESULT;
-                        elsif step_count = 63 then
-                            hit_reg <= '0';
-                            state   <= OUTPUT_RESULT;
-                        else
-                            -- advance: p = p + dir * d_min
-                            -- fp_mul_dir: dir_t(18) × pos_t(18) → pos_t(18) — single DSP each
-                            curr_x     <= resize(curr_x + fp_mul_dir(ray_dir_x, d_min), 5, -12);
-                            curr_y     <= resize(curr_y + fp_mul_dir(ray_dir_y, d_min), 5, -12);
-                            curr_z     <= resize(curr_z + fp_mul_dir(ray_dir_z, d_min), 5, -12);
-                            t          <= resize(t + d_min, 5, -12);
-                            step_count <= step_count + 1;
-                            state      <= COMPUTE_SOS;
-                        end if;
+                        -- sphere normal = (p − center) / |p − center|
+                        norm_sphere_x <= fp_mul_norm(resize(curr_x - SP_X, 5, -12), v_inv);
+                        norm_sphere_y <= fp_mul_norm(resize(curr_y - SP_Y, 5, -12), v_inv);
+                        norm_sphere_z <= fp_mul_norm(resize(curr_z - SP_Z, 5, -12), v_inv);
+                        state         <= EVAL_SDF;
+                    end if;
 
-                    -- ── OUTPUT_RESULT ─────────────────────────
-                    when OUTPUT_RESULT =>
-                        hit    <= hit_reg;
-                        obj_id <= obj_reg;
-                        hit_x  <= curr_x;
-                        hit_y  <= curr_y;
-                        hit_z  <= curr_z;
-                        march_t  <= t;
-                        -- select normal: sphere uses computed normal, plane uses constant (0,1,0)
-                        if obj_reg = "001" then
-                            norm_x <= norm_sphere_x;
-                            norm_y <= norm_sphere_y;
-                            norm_z <= norm_sphere_z;
-                        else
-                            norm_x <= PLANE_NX;
-                            norm_y <= PLANE_NY;
-                            norm_z <= PLANE_NZ;
-                        end if;
-                        done   <= '1';
-                        state  <= IDLE;
+                -- ── EVAL_SDF ─────────────────────────────────
+                when EVAL_SDF =>
+                    if d_sphere < d_plane then
+                        d_min   <= d_sphere;
+                        obj_reg <= "001";   -- sphere
+                    else
+                        d_min   <= d_plane;
+                        obj_reg <= "000";   -- plane
+                    end if;
+                    state <= CHECK_HIT;
+
+                -- ── CHECK_HIT ────────────────────────────────
+                when CHECK_HIT =>
+                    if d_min < HIT_DIST then
+                        hit_reg <= '1';
+                        state   <= OUTPUT_RESULT;
+                    elsif t > MAX_DIST then
+                        hit_reg <= '0';
+                        state   <= OUTPUT_RESULT;
+                    elsif step_count = 63 then
+                        hit_reg <= '0';
+                        state   <= OUTPUT_RESULT;
+                    else
+                        curr_x     <= resize(curr_x + fp_mul_dir(ray_dir_x, d_min), 5, -12);
+                        curr_y     <= resize(curr_y + fp_mul_dir(ray_dir_y, d_min), 5, -12);
+                        curr_z     <= resize(curr_z + fp_mul_dir(ray_dir_z, d_min), 5, -12);
+                        t          <= resize(t + d_min, 5, -12);
+                        step_count <= step_count + 1;
+                        state      <= COMPUTE_SOS;
+                    end if;
+
+                -- ── OUTPUT_RESULT ────────────────────────────
+                when OUTPUT_RESULT =>
+                    hit    <= hit_reg;
+                    obj_id <= obj_reg;
+                    hit_x  <= curr_x;
+                    hit_y  <= curr_y;
+                    hit_z  <= curr_z;
+                    hit_t  <= t;
+                    if obj_reg = "001" then
+                        norm_x <= norm_sphere_x;
+                        norm_y <= norm_sphere_y;
+                        norm_z <= norm_sphere_z;
+                    else
+                        norm_x <= PLANE_NX;
+                        norm_y <= PLANE_NY;
+                        norm_z <= PLANE_NZ;
+                    end if;
+                    done  <= '1';
+                    state <= IDLE;
 
                 end case;
             end if;
