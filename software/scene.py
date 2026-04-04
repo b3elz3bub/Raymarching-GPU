@@ -23,11 +23,9 @@ import time
 import sys
 
 # ── Render resolution ─────────────────────────────────────────────
-# 320×180 is a good reference. For VGA 640×480 output, Person 1 can
-# either render natively or scale up. Reduce for faster test renders.
-W, H = 320, 180
+W, H = 640, 480
 SAVE_PNG  = True
-SAVE_BIN  = True   # raw RGB565 binary for FPGA simulation comparison
+SAVE_BIN  = True   # raw RGB444 binary for FPGA simulation comparison
 
 
 # ================================================================
@@ -72,13 +70,13 @@ SPHERE_R = 0.5                                  # sphere radius
 FOG_D    = 0.028                                # fog density coefficient
 FOG_C    = np.array([0.76, 0.80, 0.87])        # fog color
 
-# Material IDs (matches your VHDL parameter constants)
-MAT_GROUND  = 1
-MAT_SPHERE  = 2
+# Material IDs
+MAT_GROUND  = 0
+MAT_SPHERE  = 1
 
 
 # ================================================================
-# Camera setup — Person 2's job, shown here for reference
+# Camera setup
 # ================================================================
 CAM    = np.array([0.0,  1.5, -3.0])
 TARGET = np.array([0.0,  0.3,  5.0])
@@ -89,24 +87,15 @@ FOV    = 0.60   # field-of-view scale
 
 
 def gen_ray(px, py):
-    """Generate ray direction for pixel (px, py).
-    Person 2 implements this in VHDL using fixed-point multiply.
-    px, py are the pixel coordinates with 0.5 sub-pixel offset.
-    """
     u = ((px / W) * 2.0 - 1.0) * (W / H) * FOV
     v = (1.0 - (py / H) * 2.0) * FOV
     return nor(RGT * u + UUP * v + FWD)
 
 
 # ================================================================
-# SDFs — Person 3's job
-# The SHADER (Person 4) only receives the outputs of these.
-# Shown here to make this script self-contained.
+# SDFs
 # ================================================================
 def sd_scene(p):
-    """Combined scene SDF. Returns (distance, material_id).
-    Person 3 implements this as the inner loop of the ray marcher.
-    """
     sph = np.linalg.norm(p - SPHERE_C) - SPHERE_R   # sphere SDF
     gnd = float(p[1])                                # ground plane y = 0
     if sph < gnd:
@@ -115,9 +104,6 @@ def sd_scene(p):
 
 
 def march(ro, rd):
-    """Ray march along rd from ro. Returns (hit, t, mat_id, hit_pos).
-    Person 3 owns this loop. Person 4 receives the outputs as registers.
-    """
     t = 0.01
     for _ in range(96):
         p = ro + rd * t
@@ -131,10 +117,6 @@ def march(ro, rd):
 
 
 def calc_normal(p):
-    """Estimate surface normal at p via finite differences.
-    Person 3 computes this and sends (nx, ny, nz) to Person 4.
-    FPGA: 6 extra SDF calls with +/- epsilon offsets.
-    """
     e = 0.0002
     return nor(np.array([
         sd_scene(p + [e, 0, 0])[0] - sd_scene(p - [e, 0, 0])[0],
@@ -144,11 +126,6 @@ def calc_normal(p):
 
 
 def soft_shadow(ro, rd):
-    """Cast a ray toward the sun. Returns shadow factor 0.0–1.0.
-    0.0 = fully in shadow, 1.0 = fully lit.
-    FPGA simplification: use hard shadow (single march, threshold).
-    'Soft' here just means a smooth penumbra via the 6*d/t term.
-    """
     res, t = 1.0, 0.02
     for _ in range(20):
         d, _ = sd_scene(ro + rd * t)
@@ -184,7 +161,7 @@ def sky_col(rd):
 
 
 # ================================================================
-# MAIN SHADER — Person 4 implements this in VHDL
+# MAIN SHADER
 #
 # Inputs arriving from Person 3 (pipeline registers):
 #   hit_flag  : std_logic
@@ -197,8 +174,8 @@ def sky_col(rd):
 #   ray_dir   : sfixed(1 downto -14)   -- x,y,z unit ray direction
 #
 # Output:
-#   rgb565_out : std_logic_vector(15 downto 0)
-#                R[15:11] G[10:5] B[4:0]
+#   rgb444_out : std_logic_vector(11 downto 0)
+#                R[11:8] G[7:4] B[3:0]
 # ================================================================
 def shade(ro, rd):
     hit, t, mat, p = march(ro, rd)
@@ -213,7 +190,7 @@ def shade(ro, rd):
     shad = soft_shadow(pe, SUN)
     rfl  = refl(rd, n)         # reflected ray direction
 
-    # ── Ground material (mat_id = 1) ────────────────────────────
+    # ── Ground material (mat_id = 0) ────────────────────────────
     if mat == MAT_GROUND:
         # Checkerboard: XOR of floor(hit_x) and floor(hit_z)
         # FPGA: just take the LSB of the integer part of hit_pos.x and hit_pos.z
@@ -235,7 +212,7 @@ def shade(ro, rd):
         fres = 0.04 + 0.96 * (1.0 - NoV) ** 5
         col  = mix(col, sky_col(rfl), cl(fres * 0.5 + 0.06, 0.0, 1.0))
 
-    # ── Sphere material (mat_id = 2) ────────────────────────────
+    # ── Sphere material (mat_id = 1) ────────────────────────────
     else:
         base = np.array([0.04, 0.12, 0.42])   # deep blue metallic
 
@@ -247,10 +224,7 @@ def shade(ro, rd):
         # H = halfway vector between sun and view (negated ray_dir = view dir)
         # FPGA: pow(x, 72) → LUT on 8-bit quantized dot(n, H)
         H    = nor(SUN - rd)
-        spec = mx0(dot(n, H)) ** 72
-        col += np.array([1.0, 0.94, 0.82]) * spec * shad * 0.85
-
-        # Metallic environment reflection (stronger Fresnel than ground)
+        spec = mx0(dot(n, H)) ** 7 # Metallic environment reflection
         NoV  = mx0(-dot(rd, n))
         fres = 0.05 + 0.95 * (1.0 - NoV) ** 4
         col  = mix(col, sky_col(rfl), cl(fres * 0.65, 0.0, 1.0))
@@ -269,29 +243,26 @@ def shade(ro, rd):
 
 
 # ================================================================
-# RGB565 packing
+# RGB444 packing
 # This is the final output stage of your shader unit.
 #
 # Input:  linear float RGB [0.0 .. 1.0] (after gamma)
-# Output: 16-bit word  R[15:11] G[10:5] B[4:0]
+# Output: 12-bit word  R[11:8] G[7:4] B[3:0]
 #
 # VHDL equivalent:
-#   r5 := to_unsigned(to_integer(r_gamma * 31), 5);
-#   g6 := to_unsigned(to_integer(g_gamma * 63), 6);
-#   b5 := to_unsigned(to_integer(b_gamma * 31), 5);
-#   rgb565 <= std_logic_vector(r5 & g6 & b5);
-#
-# Note: green gets 6 bits (twice as fine) because human eyes are
-# most sensitive to green luminance — standard RGB565 design choice.
+#   r4 := to_unsigned(to_integer(r_gamma * 15), 4);
+#   g4 := to_unsigned(to_integer(g_gamma * 15), 4);
+#   b4 := to_unsigned(to_integer(b_gamma * 15), 4);
+#   rgb444 <= std_logic_vector(r4 & g4 & b4);
 # ================================================================
-def to_rgb565(r, g, b):
-    r5 = int(cl(r, 0.0, 1.0) * 31.0 + 0.5)   # 5 bits: 0-31
-    g6 = int(cl(g, 0.0, 1.0) * 63.0 + 0.5)   # 6 bits: 0-63
-    b5 = int(cl(b, 0.0, 1.0) * 31.0 + 0.5)   # 5 bits: 0-31
+def to_rgb444(r, g, b):
+    r5 = int(cl(r, 0.0, 1.0) * 15.0 + 0.5)   # 5 bits: 0-31
+    g6 = int(cl(g, 0.0, 1.0) * 15.0 + 0.5)   # 6 bits: 0-63
+    b5 = int(cl(b, 0.0, 1.0) * 15.0 + 0.5)   # 5 bits: 0-31
     return (r5 << 11) | (g6 << 5) | b5        # pack into 16-bit word
 
-def rgb565_to_rgb888(word):
-    """Inverse — useful for previewing RGB565 output."""
+def rgb444_to_rgb888(word): 
+    """Inverse — useful for previewing RGB444 output."""
     r5 = (word >> 11) & 0x1F
     g6 = (word >>  5) & 0x3F
     b5 = (word >>  0) & 0x1F
@@ -309,18 +280,18 @@ print(f"Rendering {W}×{H}  (this is pure Python — expect ~60-120s)")
 print("Tip: reduce W and H at the top of the script for a faster test render.\n")
 
 buf_rgb888 = np.zeros((H, W, 3), dtype=np.uint8)
-buf_rgb565 = []   # flat list of 16-bit words, row-major
+buf_rgb444 = []   # flat list of 12-bit words, row-major
 
 t0 = time.time()
 for y in range(H):
     for x in range(W):
         rd   = gen_ray(x + 0.5, y + 0.5)
         col  = shade(CAM, rd)
-        word = to_rgb565(col[0], col[1], col[2])
-        r8, g8, b8 = rgb565_to_rgb888(word)
+        word = to_rgb444(col[0], col[1], col[2])
+        r8, g8, b8 = rgb444_to_rgb888(word)
 
         buf_rgb888[y, x] = [r8, g8, b8]
-        buf_rgb565.append(word)
+        buf_rgb444.append(word)
 
     elapsed = time.time() - t0
     eta     = (elapsed / (y + 1)) * (H - y - 1)
@@ -337,8 +308,8 @@ if SAVE_PNG:
 if SAVE_BIN:
     fname = "./software/out/scene_rgb565.bin"
     with open(fname, 'wb') as f:
-        for word in buf_rgb565:
+        for word in buf_rgb444:
             f.write(struct.pack('>H', word))   # big-endian 16-bit, row-major
-    print(f"Saved {fname}  ({W*H*2} bytes, raw RGB565 for FPGA sim)")
-    print(f"  Format: R[15:11] G[10:5] B[4:0], big-endian, row-major")
-    print(f"  Load in VHDL sim: read 2 bytes at a time, {W} words per line")
+    print(f"Saved {fname}  ({W*H*2} bytes, raw RGB444 for FPGA sim)")
+    print(f"  Format: R[11:8] G[7:4] B[3:0], big-endian, row-major")
+    print(f"  Load in VHDL sim: read 1 byte at a time, {W} words per line")
