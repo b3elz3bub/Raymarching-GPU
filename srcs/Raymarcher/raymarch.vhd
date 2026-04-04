@@ -23,7 +23,11 @@ entity raymarch is
         hit_x      : out sfixed(5 downto -12);
         hit_y      : out sfixed(5 downto -12);
         hit_z      : out sfixed(5 downto -12);
-        march_t      : out sfixed(5 downto -12)     -- total march distance along ray
+        march_t      : out sfixed(5 downto -12);     -- total march distance along ray
+        -- surface normal at hit point             [Q2.16 — sfixed(1 downto -16) — 18-bit]
+        norm_x     : out sfixed(1 downto -16);
+        norm_y     : out sfixed(1 downto -16);
+        norm_z     : out sfixed(1 downto -16)
     );
 end raymarch;
 
@@ -32,7 +36,7 @@ architecture Behavioral of raymarch is
     -- ─────────────────────────────────────────────────────────
     -- TYPES
     --   pos_t  Q6.12   sfixed(5  downto -12)  18-bit  positions, distances, d values, t
-    --   dir_t  Q2.16   sfixed(1  downto -16)  18-bit  ray directions  (locked by Person 2)
+    --   dir_t  Q2.16   sfixed(1  downto -16)  18-bit  ray directions, normals
     --   sos_t  Q12.6   sfixed(11 downto  -6)  18-bit  sum-of-squares  (range up to ~1200)
     --   inv_t  Q4.14   sfixed(3  downto -14)  18-bit  invsqrt output  (range 0..8, floor 1/64)
     -- ─────────────────────────────────────────────────────────
@@ -54,6 +58,11 @@ architecture Behavioral of raymarch is
     constant SP_X : pos_t := to_sfixed(0.0, 5, -12);
     constant SP_Y : pos_t := to_sfixed(0.0, 5, -12);
     constant SP_Z : pos_t := to_sfixed(0.0, 5, -12);
+
+    -- plane normal (constant, always pointing up)
+    constant PLANE_NX : dir_t := to_sfixed(0.0, 1, -16);
+    constant PLANE_NY : dir_t := to_sfixed(1.0, 1, -16);
+    constant PLANE_NZ : dir_t := to_sfixed(0.0, 1, -16);
 
     -- ─────────────────────────────────────────────────────────
     -- COMPONENT — invsqrt block
@@ -92,6 +101,12 @@ architecture Behavioral of raymarch is
     function fp_mul_sos(a : sos_t; b : inv_t) return pos_t is
     begin
         return resize(a * b, 5, -12);
+    end function;
+
+    -- pos × inv → dir   used for sphere normal: (p - center) * (1/||p - center||)
+    function fp_mul_norm(a : pos_t; b : inv_t) return dir_t is
+    begin
+        return resize(a * b, 1, -16);
     end function;
 
     -- ─────────────────────────────────────────────────────────
@@ -162,6 +177,11 @@ architecture Behavioral of raymarch is
     signal hit_reg : std_logic         := '0';
     signal obj_reg : unsigned(2 downto 0) := (others => '0');
 
+    -- sphere normal (computed optimistically every step; valid at hit)
+    signal norm_sphere_x : dir_t := (others => '0');
+    signal norm_sphere_y : dir_t := (others => '0');
+    signal norm_sphere_z : dir_t := (others => '0');
+
 begin
 
     -- ─────────────────────────────────────────────────────────
@@ -180,6 +200,7 @@ begin
     -- STATE MACHINE
     -- ─────────────────────────────────────────────────────────
     process(clk)
+        variable v_sq : sos_t;  -- single compute of sum_of_sq per step
     begin
         if rising_edge(clk) then
             if rst = '1' then
@@ -187,6 +208,9 @@ begin
                 done          <= '0';
                 hit           <= '0';
                 invsqrt_start <= '0';
+                norm_x        <= (others => '0');
+                norm_y        <= (others => '0');
+                norm_z        <= (others => '0');
 
             else
                 case state is
@@ -211,22 +235,30 @@ begin
 
                     -- ── COMPUTE_SOS ───────────────────────────
                     -- plane SDF is free (addition only)
-                    -- sum_of_sq feeds both the stored register and the invsqrt block
+                    -- sum_of_sq computed once via variable, feeds register + invsqrt
                     when COMPUTE_SOS =>
+                        v_sq          := sum_of_sq(curr_x, curr_y, curr_z);
                         d_plane       <= sdf_plane(curr_y);
-                        sum_sq        <= sum_of_sq(curr_x, curr_y, curr_z);
-                        invsqrt_in    <= sum_of_sq(curr_x, curr_y, curr_z);
+                        sum_sq        <= v_sq;
+                        invsqrt_in    <= v_sq;
                         invsqrt_start <= '1';
                         state         <= WAIT_INVSQRT;
 
                     -- ── WAIT_INVSQRT ─────────────────────────
                     -- sqrt(sum_sq) = sum_sq * (1/sqrt(sum_sq))
                     -- fp_mul_sos: sos_t(18) × inv_t(18) → pos_t(18)  — single DSP
+                    -- sphere normal computed here: n = (p - center) * invsqrt_out
+                    -- fp_mul_norm: pos_t(18) × inv_t(18) → dir_t(18) — single DSP each
                     when WAIT_INVSQRT =>
                         invsqrt_start <= '0';
                         if invsqrt_done = '1' then
-                            d_sphere <= resize(fp_mul_sos(sum_sq, invsqrt_out) - RADIUS, 5, -12);
-                            state    <= EVAL_SDF;
+                            d_sphere      <= resize(fp_mul_sos(sum_sq, invsqrt_out) - RADIUS, 5, -12);
+                            -- sphere normal = normalize(p - center) = (p - center) / |p - center|
+                            -- invsqrt_out already holds 1/|p - center|, so just multiply
+                            norm_sphere_x <= fp_mul_norm(resize(curr_x - SP_X, 5, -12), invsqrt_out);
+                            norm_sphere_y <= fp_mul_norm(resize(curr_y - SP_Y, 5, -12), invsqrt_out);
+                            norm_sphere_z <= fp_mul_norm(resize(curr_z - SP_Z, 5, -12), invsqrt_out);
+                            state         <= EVAL_SDF;
                         end if;
 
                     -- ── EVAL_SDF ──────────────────────────────
@@ -270,6 +302,16 @@ begin
                         hit_y  <= curr_y;
                         hit_z  <= curr_z;
                         march_t  <= t;
+                        -- select normal: sphere uses computed normal, plane uses constant (0,1,0)
+                        if obj_reg = "001" then
+                            norm_x <= norm_sphere_x;
+                            norm_y <= norm_sphere_y;
+                            norm_z <= norm_sphere_z;
+                        else
+                            norm_x <= PLANE_NX;
+                            norm_y <= PLANE_NY;
+                            norm_z <= PLANE_NZ;
+                        end if;
                         done   <= '1';
                         state  <= IDLE;
 
