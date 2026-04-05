@@ -1,10 +1,10 @@
-------------------------------------------------------------------------------
+---------------------------------------------------------------------------------
 -- Company: 
 -- Engineer: 
 -- 
--- Create Date: 02.04.2026 21:38:12
+-- Create Date: 28.03.2026 14:03:48
 -- Design Name: 
--- Module Name: gen_tb - Behavioral
+-- Module Name: invsqrt_tb - Behavioral
 -- Project Name: 
 -- Target Devices: 
 -- Tool Versions: 
@@ -31,43 +31,36 @@ use IEEE.STD_LOGIC_1164.ALL;
 --library UNISIM;
 --use UNISIM.VComponents.all;
 
-entity gen_tb is
-    generic(
+entity invsqrt_tb is
+generic(
         inlen: integer :=18;
-        infrac: integer := 0;
         outlen: integer := 18;
-        dirfrac: integer := 16;
-        orifrac: integer := 12;
-        screen_width: integer := 720;
-        screen_height: integer := 405  
+        floatlen: integer := 32;
+        infrac: integer := 15;
+        outfrac: integer := 9
         );
 --  Port ( );
-end gen_tb;
+end invsqrt_tb;
 
-architecture Behavioral of gen_tb is
-signal dotout: std_logic_vector (outlen-1 downto 0);
-signal start:  std_logic;
-signal clk:  std_logic;
-signal pixx:  std_logic_vector (inlen-1 downto 0);
-signal pixy:  std_logic_vector (inlen-1 downto 0);
-signal originx,originy,originz:  std_logic_vector (outlen-1 downto 0);
-signal directionx,directiony,directionz:  std_logic_vector (outlen-1 downto 0);
-signal done:  std_logic;
+architecture Behavioral of invsqrt_tb is
+signal x:  std_logic_vector ((inlen-1) downto 0);
+signal clk: std_logic;
+signal start: std_logic;
+signal ans: std_logic_vector ((outlen-1) downto 0);
+signal done: std_logic;
 
 
 begin
 
-uut: entity work.gen
-    port map(
-        dotout=>dotout,
-        start=>start,
-        clk=>clk,
-        pixx=>pixx,
-        pixy=>pixy,
-        originx=>originx,originy=>originy,originz=>originz,
-        directionx=>directionx,directiony=>directiony,directionz=>directionz,
-        done=>done
-        );
+uut: entity work.invsqrt
+port map(
+x=>x,
+clk=>clk,
+start=>start,
+ans=>ans,
+done=>done
+);  
+
 process
 begin
     while true loop
@@ -77,31 +70,37 @@ begin
         wait for 5 ns;
         end loop;
         end process;
-
+        
 process
     begin
     
+    
     start<='0';
-    pixx<= "00" & x"0000"; -- 0(decimal) in Q18.0
-    pixy<= "00" & x"0000"; -- 0(decimal) in Q18.0
+    x<=(others=>'0');
+    wait for 21 ns;
+    
+    x<="00" & x"8000";
     wait for 20 ns;
     
-    
     start<='1';
-    wait for 11 ns;
+    wait for 10 ns;
     
     start<='0';
-    pixx<= "00" & x"0168"; -- 360.0(decimal in Q18.0
-    pixy<= "00" & x"00cb"; -- 203.0(decimal) in Q18.0
-    wait for 400 ns;
+    wait for 10 ns;
     
+    x<="11" & x"ffff";
+    wait for 150 ns;
     
     start<='1';
-    wait for 11 ns;
+    wait for 10 ns;
     
     start<='0';
+    wait for 10 ns;
+    
+    x<=(others=>'0');
     wait;
 
-end process;                 
+end process;
+
 
 end Behavioral;
