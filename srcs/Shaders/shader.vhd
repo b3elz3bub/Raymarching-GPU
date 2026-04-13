@@ -52,14 +52,7 @@ end entity shader;
 
 architecture rtl of shader is
 
-    -- ─────────────────────────────────────────────────────────────
-    -- TYPE ALIASES (matching raymarch.vhd conventions)
-    -- ─────────────────────────────────────────────────────────────
-    subtype pos_t is sfixed(5  downto -12);  -- Q6.12, 18-bit
-    subtype dir_t is sfixed(1  downto -16);  -- Q2.16, 18-bit
-    -- Color channel: unsigned 0.0 to ~1.0, represented as Q1.10 (11-bit)
-    -- Range [0, 1.999] but we clamp to [0,1] at output
-    subtype col_t is sfixed(1  downto -10);  -- Q2.10, 12-bit
+    -- Types pos_t, dir_t, col_t now come from params_pkg
 
     -- ─────────────────────────────────────────────────────────────
     -- MULTIPLY HELPERS (18x18 → DSP)
@@ -317,6 +310,7 @@ begin
         variable v_ck      : col_t;
         -- For sky color calculation
         variable v_sky_t   : col_t;
+        variable v_fog_slv : std_logic_vector(11 downto 0);
     begin
         if rising_edge(clk) then
             if rst = '1' then
@@ -586,10 +580,10 @@ begin
                             std_logic_vector(r_t(4 downto 0))));
                     end if;
 
-                    -- fog_amt as col_t: LUT value / 1024
-                    v_fog_amt := to_sfixed(
-                        real(to_integer(FOG_LUT(v_fog_idx))) / 1024.0,
-                        1, -10);
+                    -- fog_amt as col_t: LUT value is 0..1023 representing 0.0..~1.0
+                    -- Construct col_t (Q2.10) directly: "00" & 10-bit fraction
+                    v_fog_slv := "00" & std_logic_vector(FOG_LUT(v_fog_idx));
+                    v_fog_amt := to_sfixed(v_fog_slv, 1, -10);
 
                     -- mix: col = col + fog_amt * (fog_color - col)
                     col_r <= clamp01(resize(col_r + mul_cc(v_fog_amt,
