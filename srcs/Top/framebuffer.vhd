@@ -8,12 +8,12 @@ entity framebuffer is
         wr_clk     : in  std_logic;
         rd_clk     : in  std_logic;
         
-        rd_addr    : in  std_logic_vector(clog2(SCREEN_WIDTH * SCREEN_HEIGHT) - 1 downto 0);
-        wr_addr    : in  std_logic_vector(clog2(SCREEN_WIDTH * SCREEN_HEIGHT) - 1 downto 0);
+        rd_addr    : in  std_logic_vector(FB_ADDR_WIDTH - 1 downto 0);
+        wr_addr    : in  std_logic_vector(FB_ADDR_WIDTH - 1 downto 0);
         
         write_data : in  std_logic_vector(COLOR_DEPTH - 1 downto 0);
         write_en   : in  std_logic;
-        read_data : out std_logic_vector(COLOR_DEPTH - 1 downto 0);
+        read_data : out std_logic_vector(COLOR_DEPTH - 1 downto 0)
     );
 end entity framebuffer;
 
