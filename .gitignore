@@ -1,0 +1,46 @@
+# Logs
+vivado*.jou
+vivado*.log
+temp.md
+*.backup.jou
+*.backup.log
+*.str
+
+# Generated directories
+.cache/
+.hw/
+.ip_user_files/
+.runs/
+.sim/
+.gen/
+.Xil/
+
+# Bitstream / reports / checkpoints
+*.bit
+*.ltx
+*.dcp
+*.rpt
+*.debug
+*.txt
+*.elf
+*.bin
+build_out/
+ip/
+logs/
+
+# Webtalk
+usage_statistics_webtalk.*
+
+# Simulation
+xsim.dir/
+*.wdb
+*.vcd
+*.pb
+
+# Project mode
+*.xpr
+*.xpr.user
+*.code-workspace
+
+#temporary files
+temp.tcl
