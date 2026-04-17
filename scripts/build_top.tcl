@@ -4,7 +4,7 @@
 # Usage: vivado -mode batch -source scripts/build_top.tcl
 #   Or:  source scripts/build_top.tcl   (from Vivado TCL console)
 #
-# Target: Artix-7 (xc7a35tcpg236-1) — change -part as needed
+# Target: ZedBoard Zynq-7000 (xc7z020clg484-1)
 # ==============================================================================
 
 set proj_dir [file dirname [file dirname [file normalize [info script]]]]
@@ -14,7 +14,7 @@ file mkdir $out_dir
 # ──────────────────────────────────────────────────────────
 # Create project
 # ──────────────────────────────────────────────────────────
-create_project raymarcher_build "$out_dir/build" -part xc7a35tcpg236-1 -force
+create_project raymarcher_build "$out_dir/build" -part xc7z020clg484-1 -force
 
 # ──────────────────────────────────────────────────────────
 # Add all source files

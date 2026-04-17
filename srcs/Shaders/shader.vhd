@@ -370,13 +370,15 @@ begin
                         1, -10);
                     v_sky_t := clamp01(v_sky_t);
 
-                    -- mix(horizon, zenith, t) = horizon + t*(zenith - horizon)
-                    col_r <= resize(SKY_HOR_R + mul_cc(v_sky_t,
-                                resize(SKY_ZEN_R - SKY_HOR_R, 1, -10)), 1, -10);
-                    col_g <= resize(SKY_HOR_G + mul_cc(v_sky_t,
-                                resize(SKY_ZEN_G - SKY_HOR_G, 1, -10)), 1, -10);
-                    col_b <= resize(SKY_HOR_B + mul_cc(v_sky_t,
-                                resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
+                    -- mix(horizon, zenith, t) = horizon - t*(horizon - zenith)
+                    -- We subtract to keep the constant (SKY_HOR - SKY_ZEN) positive, 
+                    -- working around potential Vivado synthesis bugs with negative sfixed constants.
+                    col_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
+                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
+                    col_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
+                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
+                    col_b <= resize(SKY_HOR_B - mul_cc(v_sky_t,
+                                resize(SKY_HOR_B - SKY_ZEN_B, 1, -10)), 1, -10);
 
                     state <= S_GAMMA_PACK;
 
@@ -516,21 +518,21 @@ begin
                     v_tmp := resize(
                         mul_cc(nov, resize(r_ny, 1, -10)),
                         1, -10);
-                    -- refl_y ≈ rd_y + 2*v_tmp
+                    -- refl_y ≈ rd_y + 2*NoV*ny
                     v_sky_t := resize(
                         to_sfixed(0.5, 1, -10) +
                         resize(r_dy, 1, -10) +
-                        v_tmp,    -- 2*NoV*Ny (v_tmp already multiplied, adding ~twice)
+                        v_tmp + v_tmp,    -- Add twice to apply the missing 2.0x factor
                         1, -10);
                     v_sky_t := clamp01(v_sky_t);
 
-                    -- Sky reflection color from gradient
-                    sky_r <= resize(SKY_HOR_R + mul_cc(v_sky_t,
-                                resize(SKY_ZEN_R - SKY_HOR_R, 1, -10)), 1, -10);
-                    sky_g <= resize(SKY_HOR_G + mul_cc(v_sky_t,
-                                resize(SKY_ZEN_G - SKY_HOR_G, 1, -10)), 1, -10);
-                    sky_b <= resize(SKY_HOR_B + mul_cc(v_sky_t,
-                                resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
+                    -- Sky reflection color from gradient (subtract positive difference)
+                    sky_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
+                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
+                    sky_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
+                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
+                    sky_b <= resize(SKY_HOR_B - mul_cc(v_sky_t,
+                                resize(SKY_HOR_B - SKY_ZEN_B, 1, -10)), 1, -10);
 
                     state <= S_MIX_REFL;
 

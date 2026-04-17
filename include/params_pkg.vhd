@@ -43,7 +43,7 @@ package params_pkg is
     -- ═══════════════════════════════════════════════════════════════
     -- Sphere center & radius
     constant SPHERE_CX : pos_t := to_sfixed(0.0, 5, -12);
-    constant SPHERE_CY : pos_t := to_sfixed(0.8, 5, -12);
+    constant SPHERE_CY : pos_t := to_sfixed(0.5, 5, -12);
     constant SPHERE_CZ : pos_t := to_sfixed(3.0, 5, -12);
     constant SPHERE_R  : pos_t := to_sfixed(0.5, 5, -12);
 
@@ -71,15 +71,16 @@ package params_pkg is
     -- CAMERA DEFAULTS
     -- ═══════════════════════════════════════════════════════════════
     constant CAM_INIT_X : pos_t := to_sfixed(0.0,  5, -12);
-    constant CAM_INIT_Y : pos_t := to_sfixed(1.5,  5, -12);
-    constant CAM_INIT_Z : pos_t := to_sfixed(-3.0, 5, -12);
+    constant CAM_INIT_Y : pos_t := to_sfixed(2.5,  5, -12);
+    constant CAM_INIT_Z : pos_t := to_sfixed(-20.0, 5, -12);
     constant CAM_STEP   : pos_t := to_sfixed(0.1,  5, -12);
 
     -- ═══════════════════════════════════════════════════════════════
     -- CLOCK & DEBOUNCE
     -- ═══════════════════════════════════════════════════════════════
     constant CLK_FREQ        : integer := 100_000_000;
-    constant DEBOUNCE_CYCLES : integer := CLK_FREQ / 50;  -- 20ms debounce
+    constant DEBOUNCE_CYCLES : integer := CLK_FREQ / 50;   -- 20ms debounce
+    constant CAM_REPEAT_CYCLES : integer := CLK_FREQ / 5;  -- 200ms repeat rate
 
     -- ═══════════════════════════════════════════════════════════════
     -- UTILITY FUNCTIONS

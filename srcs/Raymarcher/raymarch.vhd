@@ -47,14 +47,14 @@ architecture Behavioral of raymarch is
     constant ONE : pos_t := to_sfixed(1.0, 5, -12);
 
     -- ─────────────────────────────────────────────────────────
-    -- COMPONENT — invsqrt (raymarch uses Q12.6 input → Q4.14 output)
+    -- COMPONENT — invsqrt (hardware module expects Q3.15 input → Q9.9 output)
     -- ─────────────────────────────────────────────────────────
     component invsqrt
         Port (
             clk   : in  std_logic;
             start : in  std_logic;
-            x     : in  sos_t;
-            ans   : out inv_t;
+            x     : in  std_logic_vector(17 downto 0);
+            ans   : out sfixed(8 downto -9);
             done  : out std_logic
         );
     end component;
@@ -102,10 +102,14 @@ architecture Behavioral of raymarch is
     signal step_count : unsigned(5 downto 0) := (others => '0');
 
     -- Invsqrt interface
-    signal invsqrt_start : std_logic := '0';
-    signal invsqrt_in    : sos_t     := (others => '0');
-    signal invsqrt_out   : inv_t     := (others => '0');
-    signal invsqrt_done  : std_logic;
+    signal invsqrt_start  : std_logic := '0';
+    signal invsqrt_in     : sos_t     := (others => '0');  -- Q12.6
+    signal invsqrt_out    : inv_t     := (others => '0');  -- Q4.14
+    signal invsqrt_done   : std_logic;
+
+    -- Hardware bindings
+    signal invsqrt_hw_in  : std_logic_vector(17 downto 0);
+    signal invsqrt_hw_out : sfixed(8 downto -9);
 
     -- SDF intermediates
     signal d_plane, d_sphere, d_min : pos_t := (others => '0');
@@ -123,9 +127,15 @@ architecture Behavioral of raymarch is
 
 begin
 
+    -- Format mapping: 
+    -- 1. Pass lower 9 bits of Q12.6 input and pad with 9 zeros to pretend it's Q3.15
+    -- 2. Take top 13 bits of Q9.9 output and pad with 5 zeros to return Q4.14
+    invsqrt_hw_in <= std_logic_vector(invsqrt_in(2 downto -6)) & "000000000";
+    invsqrt_out   <= to_sfixed(std_logic_vector(invsqrt_hw_out(3 downto -9)) & "00000", inv_t'left, inv_t'right);
+
     INVSQRT_UNIT : invsqrt
         port map (clk => clk, start => invsqrt_start,
-                  x => invsqrt_in, ans => invsqrt_out, done => invsqrt_done);
+                  x => invsqrt_hw_in, ans => invsqrt_hw_out, done => invsqrt_done);
 
     -- ─────────────────────────────────────────────────────────
     -- MAIN PROCESS

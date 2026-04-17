@@ -75,7 +75,7 @@ architecture Behavioral of raygen is
 
 begin
 
-    invh <= "00" & x"00A2";                              -- Q2.16
+    invh <= "00" & x"0089";                              -- 1/480 in Q2.16 (137/65536 ≈ 0.00209)
     h    <= TO_SIGNED(SCREEN_HEIGHT, inlen);               -- Q18.0
     w    <= TO_SIGNED(SCREEN_WIDTH,  inlen);               -- Q18.0
     dotz <= "00" & x"8000";                              -- (1.0) in Q3.15
