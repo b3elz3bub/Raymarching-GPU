@@ -230,7 +230,7 @@ begin
                     if d_min < HIT_DIST then
                         hit_reg <= '1';
                         state   <= OUTPUT_RESULT;
-                    elsif t > MAX_DIST then
+                    elsif t > MAX_DIST or t < to_sfixed(0.0, 5, -12) then  -- Overflow Wrap Preventer
                         hit_reg <= '0';
                         state   <= OUTPUT_RESULT;
                     elsif step_count = MAX_MARCH_STEPS then
