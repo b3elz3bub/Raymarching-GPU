@@ -246,17 +246,22 @@ architecture rtl of shader is
         S_IDLE,
         S_LATCH,
         S_MISS_SKY,
+        S_MISS_SKY_2,   -- pipeline gradient calculation
         S_DIFFUSE_1,    -- Nx*Sx
         S_DIFFUSE_2,    -- + Ny*Sy
         S_DIFFUSE_3,    -- + Nz*Sz → diff
         S_MATERIAL,     -- select base color, compute checker for ground
-        S_LIGHT_MUL,    -- base * (sun_tint * diff + ambient)  per channel
+        S_LIGHT_MUL,    -- compute sun_tint * diff + ambient
+        S_LIGHT_MUL_2,  -- base * (...)
         S_NOV_1,        -- compute -dot(rd, N) step 1: rdx*nx
         S_NOV_2,        -- + rdy*ny
         S_NOV_3,        -- + rdz*nz → NoV, then (1-NoV)
-        S_FRESNEL,      -- (1-NoV)^4 = two squarings
+        S_FRESNEL,      -- (1-NoV)^2
+        S_FRESNEL_2,    -- ((1-NoV)^2)^2
         S_REFLECT_SKY,  -- simplified sky color from reflect direction
-        S_MIX_REFL,     -- mix(col, sky_refl, fres_factor)
+        S_REFLECT_SKY_2,-- pipeline sky reflection gradient
+        S_MIX_REFL,     -- fresnel factor
+        S_MIX_REFL_2,   -- mix(col, sky_refl, fres_factor)
         S_FOG,          -- fog LUT + mix
         S_GAMMA_PACK    -- gamma LUT + pack RGB444
     );
@@ -363,23 +368,19 @@ begin
                 when S_MISS_SKY =>
                     -- Approximate sky: use ray_dir_y to blend
                     -- rd_y is dir_t (Q2.16). We want t = rd_y*0.5 + 0.5
-                    -- For simplicity: if rd_y >= 0 → blend toward zenith
-                    --                  if rd_y <  0 → horizon
                     v_sky_t := resize(
                         to_sfixed(0.5, 1, -10) +
                         mul_dd(r_dy, to_sfixed(0.5, 1, -16)),
                         1, -10);
-                    v_sky_t := clamp01(v_sky_t);
+                    acc <= clamp01(v_sky_t);  -- store in acc to break multiplier chain
+                    state <= S_MISS_SKY_2;
 
-                    -- mix(horizon, zenith, t) = horizon - t*(horizon - zenith)
-                    -- We subtract to keep the constant (SKY_HOR - SKY_ZEN) positive, 
-                    -- working around potential Vivado synthesis bugs with negative sfixed constants.
-                    -- Note: SKY_ZEN_B > SKY_HOR_B, so we ADD for the blue channel to keep the constant positive.
-                    col_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
+                when S_MISS_SKY_2 =>
+                    col_r <= resize(SKY_HOR_R - mul_cc(acc,
                                 resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
-                    col_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
+                    col_g <= resize(SKY_HOR_G - mul_cc(acc,
                                 resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
-                    col_b <= resize(SKY_HOR_B + mul_cc(v_sky_t,
+                    col_b <= resize(SKY_HOR_B + mul_cc(acc,
                                 resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
 
                     state <= S_GAMMA_PACK;
@@ -451,16 +452,22 @@ begin
                 -- ══════════════════════════════════════════════════
                 when S_LIGHT_MUL =>
                     if r_mat = "000" then
-                        -- Ground lighting
-                        col_r <= mul_cc(base_r, resize(mul_cc(SUN_TINT_R, diff) + GND_AMB_R, 1, -10));
-                        col_g <= mul_cc(base_g, resize(mul_cc(SUN_TINT_G, diff) + GND_AMB_G, 1, -10));
-                        col_b <= mul_cc(base_b, resize(mul_cc(SUN_TINT_B, diff) + GND_AMB_B, 1, -10));
+                        -- Ground lighting partial
+                        col_r <= resize(mul_cc(SUN_TINT_R, diff) + GND_AMB_R, 1, -10);
+                        col_g <= resize(mul_cc(SUN_TINT_G, diff) + GND_AMB_G, 1, -10);
+                        col_b <= resize(mul_cc(SUN_TINT_B, diff) + GND_AMB_B, 1, -10);
                     else
-                        -- Sphere lighting
-                        col_r <= mul_cc(base_r, resize(mul_cc(SUN_TINT_R, diff) + SPH_AMB_R, 1, -10));
-                        col_g <= mul_cc(base_g, resize(mul_cc(SUN_TINT_G, diff) + SPH_AMB_G, 1, -10));
-                        col_b <= mul_cc(base_b, resize(mul_cc(SUN_TINT_B, diff) + SPH_AMB_B, 1, -10));
+                        -- Sphere lighting partial
+                        col_r <= resize(mul_cc(SUN_TINT_R, diff) + SPH_AMB_R, 1, -10);
+                        col_g <= resize(mul_cc(SUN_TINT_G, diff) + SPH_AMB_G, 1, -10);
+                        col_b <= resize(mul_cc(SUN_TINT_B, diff) + SPH_AMB_B, 1, -10);
                     end if;
+                    state <= S_LIGHT_MUL_2;
+
+                when S_LIGHT_MUL_2 =>
+                    col_r <= mul_cc(base_r, col_r);
+                    col_g <= mul_cc(base_g, col_g);
+                    col_b <= mul_cc(base_b, col_b);
                     state <= S_NOV_1;
 
                 -- ══════════════════════════════════════════════════
@@ -497,15 +504,11 @@ begin
                 -- ══════════════════════════════════════════════════
                 when S_FRESNEL =>
                     v_tmp := resize(COL_ONE - nov, 1, -10);  -- (1 - NoV)
-                    v_tmp := mul_cc(v_tmp, v_tmp);           -- (1-NoV)^2
-                    fres  <= mul_cc(v_tmp, v_tmp);           -- (1-NoV)^4
+                    fres  <= mul_cc(v_tmp, v_tmp);           -- (1-NoV)^2 (stored in fres)
+                    state <= S_FRESNEL_2;
 
-                    -- Compute simplified sky reflection color
-                    -- reflect(rd, N) direction's y component ≈ 2*NoV*Ny - rdy
-                    -- For the sky gradient, we only care about the y component
-                    -- refl_y = rdy - 2*(rdx*nx+rdy*ny+rdz*nz)*ny
-                    -- Since NoV = -dot(rd,n), refl_y = rdy + 2*NoV*ny
-                    -- Use nov (already computed) * ny, doubled
+                when S_FRESNEL_2 =>
+                    fres  <= mul_cc(fres, fres);             -- ((1-NoV)^2)^2 = (1-NoV)^4
                     state <= S_REFLECT_SKY;
 
                 -- ══════════════════════════════════════════════════
@@ -515,8 +518,6 @@ begin
                 -- ══════════════════════════════════════════════════
                 when S_REFLECT_SKY =>
                     -- Reflected ray y component
-                    -- 2*NoV*Ny: nov is col_t, r_ny is dir_t
-                    -- mul: col_t * dir_t → we approximate as col_t
                     v_tmp := resize(
                         mul_cc(nov, resize(r_ny, 1, -10)),
                         1, -10);
@@ -524,16 +525,18 @@ begin
                     v_sky_t := resize(
                         to_sfixed(0.5, 1, -10) +
                         resize(r_dy, 1, -10) +
-                        v_tmp + v_tmp,    -- Add twice to apply the missing 2.0x factor
+                        v_tmp + v_tmp,
                         1, -10);
-                    v_sky_t := clamp01(v_sky_t);
+                    acc <= clamp01(v_sky_t);  -- break multiplier chain
+                    state <= S_REFLECT_SKY_2;
 
-                    -- Sky reflection color from gradient (add/subtract positive difference)
-                    sky_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
+                when S_REFLECT_SKY_2 =>
+                    -- Sky reflection color from gradient
+                    sky_r <= resize(SKY_HOR_R - mul_cc(acc,
                                 resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
-                    sky_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
+                    sky_g <= resize(SKY_HOR_G - mul_cc(acc,
                                 resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
-                    sky_b <= resize(SKY_HOR_B + mul_cc(v_sky_t,
+                    sky_b <= resize(SKY_HOR_B + mul_cc(acc,
                                 resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
 
                     state <= S_MIX_REFL;
@@ -547,15 +550,18 @@ begin
                 when S_MIX_REFL =>
                     if r_mat = "000" then
                         -- Ground: fres * 0.5 + 0.06
-                        v_fres_factor := resize(
+                        acc <= resize(
                             mul_cc(fres, to_sfixed(0.5, 1, -10)) +
                             to_sfixed(0.06, 1, -10),
                             1, -10);
                     else
                         -- Sphere: fres * 0.65
-                        v_fres_factor := mul_cc(fres, to_sfixed(0.65, 1, -10));
+                        acc <= mul_cc(fres, to_sfixed(0.65, 1, -10));
                     end if;
-                    v_fres_factor := clamp01(v_fres_factor);
+                    state <= S_MIX_REFL_2;
+
+                when S_MIX_REFL_2 =>
+                    v_fres_factor := clamp01(acc);
 
                     -- col = col + fres_factor * (sky - col)
                     col_r <= resize(col_r + mul_cc(v_fres_factor,
