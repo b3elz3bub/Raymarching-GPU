@@ -93,15 +93,16 @@ architecture rtl of shader is
     -- SUN_DIR is in pos_t (sfixed 5 downto -12) in params_pkg
     -- We'll use them directly in mul_dp
 
-    -- Fog color (from Python: [0.76, 0.80, 0.87])
-    constant FOG_R : col_t := to_sfixed(0.76, 1, -10);
-    constant FOG_G : col_t := to_sfixed(0.80, 1, -10);
-    constant FOG_B : col_t := to_sfixed(0.87, 1, -10);
+    -- Fog color and strength (lower weight avoids washed-out image)
+    constant FOG_R : col_t := to_sfixed(0.70, 1, -10);
+    constant FOG_G : col_t := to_sfixed(0.75, 1, -10);
+    constant FOG_B : col_t := to_sfixed(0.84, 1, -10);
+    constant FOG_STRENGTH : col_t := to_sfixed(0.62, 1, -10);
 
-    -- Sky horizon color (warm cream: [0.88, 0.84, 0.76])
-    constant SKY_HOR_R : col_t := to_sfixed(0.88, 1, -10);
-    constant SKY_HOR_G : col_t := to_sfixed(0.84, 1, -10);
-    constant SKY_HOR_B : col_t := to_sfixed(0.76, 1, -10);
+    -- Sky horizon color (slightly deeper to increase scene contrast)
+    constant SKY_HOR_R : col_t := to_sfixed(0.84, 1, -10);
+    constant SKY_HOR_G : col_t := to_sfixed(0.78, 1, -10);
+    constant SKY_HOR_B : col_t := to_sfixed(0.70, 1, -10);
 
     -- Sky zenith color (deep blue: [0.18, 0.38, 0.82])
     constant SKY_ZEN_R : col_t := to_sfixed(0.18, 1, -10);
@@ -118,10 +119,10 @@ architecture rtl of shader is
     constant GND_AMB_G : col_t := to_sfixed(0.066, 1, -10);
     constant GND_AMB_B : col_t := to_sfixed(0.126, 1, -10);
 
-    -- Sphere base color (deep blue metallic: [0.04, 0.12, 0.42])
-    constant SPH_BASE_R : col_t := to_sfixed(0.04, 1, -10);
-    constant SPH_BASE_G : col_t := to_sfixed(0.12, 1, -10);
-    constant SPH_BASE_B : col_t := to_sfixed(0.42, 1, -10);
+    -- Sphere base color (richer blue to avoid flat desaturation)
+    constant SPH_BASE_R : col_t := to_sfixed(0.05, 1, -10);
+    constant SPH_BASE_G : col_t := to_sfixed(0.14, 1, -10);
+    constant SPH_BASE_B : col_t := to_sfixed(0.48, 1, -10);
 
     -- Sphere ambient ([0.10, 0.16, 0.40] * 0.45)
     constant SPH_AMB_R : col_t := to_sfixed(0.045, 1, -10);
@@ -585,7 +586,7 @@ begin
                     -- fog_amt as col_t: LUT value is 0..1023 representing 0.0..~1.0
                     -- Construct col_t (Q2.10) directly: "00" & 10-bit fraction
                     v_fog_slv := "00" & std_logic_vector(FOG_LUT(v_fog_idx));
-                    v_fog_amt := to_sfixed(v_fog_slv, 1, -10);
+                    v_fog_amt := mul_cc(to_sfixed(v_fog_slv, 1, -10), FOG_STRENGTH);
 
                     -- mix: col = col + fog_amt * (fog_color - col)
                     col_r <= clamp01(resize(col_r + mul_cc(v_fog_amt,

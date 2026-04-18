@@ -58,7 +58,7 @@ package params_pkg is
     -- ═══════════════════════════════════════════════════════════════
     -- RAYMARCHING PARAMETERS
     -- ═══════════════════════════════════════════════════════════════
-    constant HIT_DIST       : pos_t := to_sfixed(0.005, 5, -12);
+    constant HIT_DIST       : pos_t := to_sfixed(0.003, 5, -12);
     constant MAX_DIST       : pos_t := to_sfixed(20.0,  5, -12);
     constant MAX_MARCH_STEPS : integer := 63;
 
@@ -71,8 +71,8 @@ package params_pkg is
     -- CAMERA DEFAULTS
     -- ═══════════════════════════════════════════════════════════════
     constant CAM_INIT_X : pos_t := to_sfixed(0.0,  5, -12);
-    constant CAM_INIT_Y : pos_t := to_sfixed(2.5,  5, -12);
-    constant CAM_INIT_Z : pos_t := to_sfixed(-20.0, 5, -12);
+    constant CAM_INIT_Y : pos_t := to_sfixed(1.5,  5, -12);
+    constant CAM_INIT_Z : pos_t := to_sfixed(-5.0, 5, -12);
     constant CAM_STEP   : pos_t := to_sfixed(0.1,  5, -12);
 
     -- ═══════════════════════════════════════════════════════════════
