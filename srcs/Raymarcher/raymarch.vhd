@@ -128,9 +128,7 @@ architecture Behavioral of raymarch is
 begin
 
     -- Format mapping: 
-    -- 1. Pass lower 9 bits of Q12.6 input and pad with 9 zeros to pretend it's Q3.15
-    -- 2. Take top 13 bits of Q9.9 output and pad with 5 zeros to return Q4.14
-    invsqrt_hw_in <= std_logic_vector(invsqrt_in(2 downto -6)) & "000000000";
+    -- Hardware expects Q3.15. We pass the chosen bits directly from the FSM to preserve precision.
     invsqrt_out   <= to_sfixed(std_logic_vector(invsqrt_hw_out(3 downto -9)) & "00000", inv_t'left, inv_t'right);
 
     INVSQRT_UNIT : invsqrt
@@ -186,12 +184,13 @@ begin
                         scaled        <= '0';
                         state         <= EVAL_SDF;
                     elsif v_sq > SOS_LO then
-                        invsqrt_in    <= shift_right(v_sq, 6);
+                        -- Pass bits 8 downto -6 of v_sq directly (equals v_sq / 64) to retain all 15 fractional bits.
+                        invsqrt_hw_in <= std_logic_vector(v_sq(8 downto -6)) & "000";
                         invsqrt_start <= '1';
                         scaled        <= '1';
                         state         <= WAIT_INVSQRT;
                     else
-                        invsqrt_in    <= v_sq;
+                        invsqrt_hw_in <= std_logic_vector(v_sq(2 downto -6)) & "000000000";
                         invsqrt_start <= '1';
                         scaled        <= '0';
                         state         <= WAIT_INVSQRT;
@@ -202,17 +201,17 @@ begin
                     invsqrt_start <= '0';
                     if invsqrt_done = '1' then
                         if scaled = '1' then
-                            d_sphere <= resize(shift_right(sum_sq * invsqrt_out, 3) - SPHERE_R, 5, -12);
-                            norm_sphere_x <= resize(shift_right(resize(curr_x - SPHERE_CX, 5, -12) * invsqrt_out, 3), 1, -16);
-                            norm_sphere_y <= resize(shift_right(resize(curr_y - SPHERE_CY, 5, -12) * invsqrt_out, 3), 1, -16);
-                            norm_sphere_z <= resize(shift_right(resize(curr_z - SPHERE_CZ, 5, -12) * invsqrt_out, 3), 1, -16);
+                            v_inv := shift_right(invsqrt_out, 3);
                         else
-                            d_sphere <= resize(sum_sq * invsqrt_out - SPHERE_R, 5, -12);
-                            norm_sphere_x <= resize(resize(curr_x - SPHERE_CX, 5, -12) * invsqrt_out, 1, -16);
-                            norm_sphere_y <= resize(resize(curr_y - SPHERE_CY, 5, -12) * invsqrt_out, 1, -16);
-                            norm_sphere_z <= resize(resize(curr_z - SPHERE_CZ, 5, -12) * invsqrt_out, 1, -16);
+                            v_inv := invsqrt_out;
                         end if;
-                        state <= EVAL_SDF;
+
+                        d_sphere <= resize(fp_mul_sos(sum_sq, v_inv) - SPHERE_R, 5, -12);
+
+                        norm_sphere_x <= fp_mul_norm(resize(curr_x - SPHERE_CX, 5, -12), v_inv);
+                        norm_sphere_y <= fp_mul_norm(resize(curr_y - SPHERE_CY, 5, -12), v_inv);
+                        norm_sphere_z <= fp_mul_norm(resize(curr_z - SPHERE_CZ, 5, -12), v_inv);
+                        state         <= EVAL_SDF;
                     end if;
 
                 -- ── EVAL_SDF ─────────────────────────────────
