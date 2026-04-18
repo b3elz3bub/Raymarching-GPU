@@ -44,22 +44,25 @@ set_property IOSTANDARD LVCMOS18 [get_ports btn_back]
 # VGA — RGB444 (4 bits per channel, resistor DAC on ZedBoard)
 # ──────────────────────────────────────────────────────────
 # Red channel [3:0]  (vga_rgb[11:8])
-set_property PACKAGE_PIN V20  [get_ports {vga_rgb[11]}]
-set_property PACKAGE_PIN U20  [get_ports {vga_rgb[10]}]
-set_property PACKAGE_PIN V19  [get_ports {vga_rgb[9]}]
-set_property PACKAGE_PIN V18  [get_ports {vga_rgb[8]}]
+# vga_rgb[11] = R MSB → VGA_R[3], vga_rgb[8] = R LSB → VGA_R[0]
+set_property PACKAGE_PIN V18  [get_ports {vga_rgb[11]}]
+set_property PACKAGE_PIN V19  [get_ports {vga_rgb[10]}]
+set_property PACKAGE_PIN U20  [get_ports {vga_rgb[9]}]
+set_property PACKAGE_PIN V20  [get_ports {vga_rgb[8]}]
 
 # Green channel [3:0]  (vga_rgb[7:4])
-set_property PACKAGE_PIN AB22 [get_ports {vga_rgb[7]}]
-set_property PACKAGE_PIN AA22 [get_ports {vga_rgb[6]}]
-set_property PACKAGE_PIN AB21 [get_ports {vga_rgb[5]}]
-set_property PACKAGE_PIN AA21 [get_ports {vga_rgb[4]}]
+# vga_rgb[7] = G MSB → VGA_G[3], vga_rgb[4] = G LSB → VGA_G[0]
+set_property PACKAGE_PIN AA21 [get_ports {vga_rgb[7]}]
+set_property PACKAGE_PIN AB21 [get_ports {vga_rgb[6]}]
+set_property PACKAGE_PIN AA22 [get_ports {vga_rgb[5]}]
+set_property PACKAGE_PIN AB22 [get_ports {vga_rgb[4]}]
 
 # Blue channel [3:0]  (vga_rgb[3:0])
-set_property PACKAGE_PIN Y21  [get_ports {vga_rgb[3]}]
-set_property PACKAGE_PIN Y20  [get_ports {vga_rgb[2]}]
-set_property PACKAGE_PIN AB20 [get_ports {vga_rgb[1]}]
-set_property PACKAGE_PIN AB19 [get_ports {vga_rgb[0]}]
+# vga_rgb[3] = B MSB → VGA_B[3], vga_rgb[0] = B LSB → VGA_B[0]
+set_property PACKAGE_PIN AB19 [get_ports {vga_rgb[3]}]
+set_property PACKAGE_PIN AB20 [get_ports {vga_rgb[2]}]
+set_property PACKAGE_PIN Y20  [get_ports {vga_rgb[1]}]
+set_property PACKAGE_PIN Y21  [get_ports {vga_rgb[0]}]
 
 # VGA sync signals
 set_property PACKAGE_PIN AA19 [get_ports vga_hsync]
