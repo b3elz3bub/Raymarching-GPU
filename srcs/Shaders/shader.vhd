@@ -119,10 +119,10 @@ architecture rtl of shader is
     constant GND_AMB_G : col_t := to_sfixed(0.066, 1, -10);
     constant GND_AMB_B : col_t := to_sfixed(0.126, 1, -10);
 
-    -- Sphere base color (richer blue to avoid flat desaturation)
-    constant SPH_BASE_R : col_t := to_sfixed(0.05, 1, -10);
-    constant SPH_BASE_G : col_t := to_sfixed(0.14, 1, -10);
-    constant SPH_BASE_B : col_t := to_sfixed(0.48, 1, -10);
+    -- Sphere base color (vibrant blue)
+    constant SPH_BASE_R : col_t := to_sfixed(0.10, 1, -10);
+    constant SPH_BASE_G : col_t := to_sfixed(0.40, 1, -10);
+    constant SPH_BASE_B : col_t := to_sfixed(0.90, 1, -10);
 
     -- Sphere ambient ([0.10, 0.16, 0.40] * 0.45)
     constant SPH_AMB_R : col_t := to_sfixed(0.045, 1, -10);
@@ -361,26 +361,10 @@ begin
                 --   color = mix(horizon, zenith, t)
                 -- ══════════════════════════════════════════════════
                 when S_MISS_SKY =>
-                    -- Approximate sky: use ray_dir_y to blend
-                    -- rd_y is dir_t (Q2.16). We want t = rd_y*0.5 + 0.5
-                    -- For simplicity: if rd_y >= 0 → blend toward zenith
-                    --                  if rd_y <  0 → horizon
-                    v_sky_t := resize(
-                        to_sfixed(0.5, 1, -10) +
-                        mul_dd(r_dy, to_sfixed(0.5, 1, -16)),
-                        1, -10);
-                    v_sky_t := clamp01(v_sky_t);
-
-                    -- mix(horizon, zenith, t) = horizon - t*(horizon - zenith)
-                    -- We subtract to keep the constant (SKY_HOR - SKY_ZEN) positive, 
-                    -- working around potential Vivado synthesis bugs with negative sfixed constants.
-                    col_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
-                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
-                    col_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
-                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
-                    col_b <= resize(SKY_HOR_B - mul_cc(v_sky_t,
-                                resize(SKY_HOR_B - SKY_ZEN_B, 1, -10)), 1, -10);
-
+                    -- Flat sky to remove 4-bit banding issues
+                    col_r <= SKY_ZEN_R;
+                    col_g <= SKY_ZEN_G;
+                    col_b <= SKY_ZEN_B;
                     state <= S_GAMMA_PACK;
 
                 -- ══════════════════════════════════════════════════
@@ -423,15 +407,15 @@ begin
                         v_checker := r_hx(0) xor r_hz(0);
 
                         if v_checker = '1' then
-                            -- Dark tile: 0.10
-                            base_r <= to_sfixed(0.10,   1, -10);
-                            base_g <= to_sfixed(0.097,  1, -10);  -- 0.10 * 0.97
-                            base_b <= to_sfixed(0.093,  1, -10);  -- 0.10 * 0.93
+                            -- Dark tile: 0.05
+                            base_r <= to_sfixed(0.05, 1, -10);
+                            base_g <= to_sfixed(0.05, 1, -10);
+                            base_b <= to_sfixed(0.05, 1, -10);
                         else
-                            -- Light tile: 0.88
-                            base_r <= to_sfixed(0.88,   1, -10);
-                            base_g <= to_sfixed(0.854,  1, -10);  -- 0.88 * 0.97
-                            base_b <= to_sfixed(0.818,  1, -10);  -- 0.88 * 0.93
+                            -- Light tile: 0.95
+                            base_r <= to_sfixed(0.95, 1, -10);
+                            base_g <= to_sfixed(0.95, 1, -10);
+                            base_b <= to_sfixed(0.95, 1, -10);
                         end if;
                     else
                         -- Sphere: deep blue metallic
@@ -513,27 +497,10 @@ begin
                 -- refl_y ≈ rd_y + 2 * NoV * N_y
                 -- ══════════════════════════════════════════════════
                 when S_REFLECT_SKY =>
-                    -- Reflected ray y component
-                    -- 2*NoV*Ny: nov is col_t, r_ny is dir_t
-                    -- mul: col_t * dir_t → we approximate as col_t
-                    v_tmp := resize(
-                        mul_cc(nov, resize(r_ny, 1, -10)),
-                        1, -10);
-                    -- refl_y ≈ rd_y + 2*NoV*ny
-                    v_sky_t := resize(
-                        to_sfixed(0.5, 1, -10) +
-                        resize(r_dy, 1, -10) +
-                        v_tmp + v_tmp,    -- Add twice to apply the missing 2.0x factor
-                        1, -10);
-                    v_sky_t := clamp01(v_sky_t);
-
-                    -- Sky reflection color from gradient (subtract positive difference)
-                    sky_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
-                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
-                    sky_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
-                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
-                    sky_b <= resize(SKY_HOR_B - mul_cc(v_sky_t,
-                                resize(SKY_HOR_B - SKY_ZEN_B, 1, -10)), 1, -10);
+                    -- Flat sky reflection to match flat sky
+                    sky_r <= SKY_ZEN_R;
+                    sky_g <= SKY_ZEN_G;
+                    sky_b <= SKY_ZEN_B;
 
                     state <= S_MIX_REFL;
 
@@ -564,7 +531,8 @@ begin
                     col_b <= resize(col_b + mul_cc(v_fres_factor,
                                 resize(sky_b - col_b, 1, -10)), 1, -10);
 
-                    state <= S_FOG;
+                    -- skip fog for crisper colors
+                    state <= S_GAMMA_PACK;
 
                 -- ══════════════════════════════════════════════════
                 -- FOG: col = mix(col, fog_color, fog_amt)

@@ -202,17 +202,17 @@ begin
                     invsqrt_start <= '0';
                     if invsqrt_done = '1' then
                         if scaled = '1' then
-                            v_inv := shift_right(invsqrt_out, 3);
+                            d_sphere <= resize(shift_right(sum_sq * invsqrt_out, 3) - SPHERE_R, 5, -12);
+                            norm_sphere_x <= resize(shift_right(resize(curr_x - SPHERE_CX, 5, -12) * invsqrt_out, 3), 1, -16);
+                            norm_sphere_y <= resize(shift_right(resize(curr_y - SPHERE_CY, 5, -12) * invsqrt_out, 3), 1, -16);
+                            norm_sphere_z <= resize(shift_right(resize(curr_z - SPHERE_CZ, 5, -12) * invsqrt_out, 3), 1, -16);
                         else
-                            v_inv := invsqrt_out;
+                            d_sphere <= resize(sum_sq * invsqrt_out - SPHERE_R, 5, -12);
+                            norm_sphere_x <= resize(resize(curr_x - SPHERE_CX, 5, -12) * invsqrt_out, 1, -16);
+                            norm_sphere_y <= resize(resize(curr_y - SPHERE_CY, 5, -12) * invsqrt_out, 1, -16);
+                            norm_sphere_z <= resize(resize(curr_z - SPHERE_CZ, 5, -12) * invsqrt_out, 1, -16);
                         end if;
-
-                        d_sphere <= resize(fp_mul_sos(sum_sq, v_inv) - SPHERE_R, 5, -12);
-
-                        norm_sphere_x <= fp_mul_norm(resize(curr_x - SPHERE_CX, 5, -12), v_inv);
-                        norm_sphere_y <= fp_mul_norm(resize(curr_y - SPHERE_CY, 5, -12), v_inv);
-                        norm_sphere_z <= fp_mul_norm(resize(curr_z - SPHERE_CZ, 5, -12), v_inv);
-                        state         <= EVAL_SDF;
+                        state <= EVAL_SDF;
                     end if;
 
                 -- ── EVAL_SDF ─────────────────────────────────
