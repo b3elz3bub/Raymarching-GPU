@@ -86,7 +86,7 @@ architecture Behavioral of raymarch is
         dx := resize(px - SPHERE_CX, 5, -12);
         dy := resize(py - SPHERE_CY, 5, -12);
         dz := resize(pz - SPHERE_CZ, 5, -12);
-        return resize(fp_mul_pos(dx,dx) + fp_mul_pos(dy,dy) + fp_mul_pos(dz,dz), 11, -6);
+        return resize(dx*dx + dy*dy + dz*dz, 11, -6);
     end function;
 
     -- ─────────────────────────────────────────────────────────

@@ -62,8 +62,10 @@ package params_pkg is
     constant MAX_DIST       : pos_t := to_sfixed(20.0,  5, -12);
     constant MAX_MARCH_STEPS : integer := 63;
 
-    -- Range-reduction thresholds for invsqrt (max input ≈ 7)
-    constant SOS_LO     : sos_t := to_sfixed(  7.0, 11, -6);
+    -- Range-reduction thresholds for invsqrt
+    -- NOTE: SOS_LO must be < 4.0 because the hw input mapping extracts
+    -- bits (2 downto -6) = signed Q3.6, which overflows at 4.0
+    constant SOS_LO     : sos_t := to_sfixed(  3.9, 11, -6);
     constant SOS_HI     : sos_t := to_sfixed(448.0, 11, -6);
     constant FAR_SPHERE : pos_t := to_sfixed(20.0,  5, -12);
 

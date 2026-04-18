@@ -361,10 +361,27 @@ begin
                 --   color = mix(horizon, zenith, t)
                 -- ══════════════════════════════════════════════════
                 when S_MISS_SKY =>
-                    -- Flat sky to remove 4-bit banding issues
-                    col_r <= SKY_ZEN_R;
-                    col_g <= SKY_ZEN_G;
-                    col_b <= SKY_ZEN_B;
+                    -- Approximate sky: use ray_dir_y to blend
+                    -- rd_y is dir_t (Q2.16). We want t = rd_y*0.5 + 0.5
+                    -- For simplicity: if rd_y >= 0 → blend toward zenith
+                    --                  if rd_y <  0 → horizon
+                    v_sky_t := resize(
+                        to_sfixed(0.5, 1, -10) +
+                        mul_dd(r_dy, to_sfixed(0.5, 1, -16)),
+                        1, -10);
+                    v_sky_t := clamp01(v_sky_t);
+
+                    -- mix(horizon, zenith, t) = horizon - t*(horizon - zenith)
+                    -- We subtract to keep the constant (SKY_HOR - SKY_ZEN) positive, 
+                    -- working around potential Vivado synthesis bugs with negative sfixed constants.
+                    -- Note: SKY_ZEN_B > SKY_HOR_B, so we ADD for the blue channel to keep the constant positive.
+                    col_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
+                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
+                    col_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
+                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
+                    col_b <= resize(SKY_HOR_B + mul_cc(v_sky_t,
+                                resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
+
                     state <= S_GAMMA_PACK;
 
                 -- ══════════════════════════════════════════════════
@@ -497,10 +514,27 @@ begin
                 -- refl_y ≈ rd_y + 2 * NoV * N_y
                 -- ══════════════════════════════════════════════════
                 when S_REFLECT_SKY =>
-                    -- Flat sky reflection to match flat sky
-                    sky_r <= SKY_ZEN_R;
-                    sky_g <= SKY_ZEN_G;
-                    sky_b <= SKY_ZEN_B;
+                    -- Reflected ray y component
+                    -- 2*NoV*Ny: nov is col_t, r_ny is dir_t
+                    -- mul: col_t * dir_t → we approximate as col_t
+                    v_tmp := resize(
+                        mul_cc(nov, resize(r_ny, 1, -10)),
+                        1, -10);
+                    -- refl_y ≈ rd_y + 2*NoV*ny
+                    v_sky_t := resize(
+                        to_sfixed(0.5, 1, -10) +
+                        resize(r_dy, 1, -10) +
+                        v_tmp + v_tmp,    -- Add twice to apply the missing 2.0x factor
+                        1, -10);
+                    v_sky_t := clamp01(v_sky_t);
+
+                    -- Sky reflection color from gradient (add/subtract positive difference)
+                    sky_r <= resize(SKY_HOR_R - mul_cc(v_sky_t,
+                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
+                    sky_g <= resize(SKY_HOR_G - mul_cc(v_sky_t,
+                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
+                    sky_b <= resize(SKY_HOR_B + mul_cc(v_sky_t,
+                                resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
 
                     state <= S_MIX_REFL;
 
