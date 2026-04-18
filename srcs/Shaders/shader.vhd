@@ -246,7 +246,6 @@ architecture rtl of shader is
         S_IDLE,
         S_LATCH,
         S_MISS_SKY,
-        S_MISS_SKY_2,   -- pipeline gradient calculation
         S_DIFFUSE_1,    -- Nx*Sx
         S_DIFFUSE_2,    -- + Ny*Sy
         S_DIFFUSE_3,    -- + Nz*Sz → diff
@@ -259,7 +258,6 @@ architecture rtl of shader is
         S_FRESNEL,      -- (1-NoV)^2
         S_FRESNEL_2,    -- ((1-NoV)^2)^2
         S_REFLECT_SKY,  -- simplified sky color from reflect direction
-        S_REFLECT_SKY_2,-- pipeline sky reflection gradient
         S_MIX_REFL,     -- fresnel factor
         S_MIX_REFL_2,   -- mix(col, sky_refl, fres_factor)
         S_FOG,          -- fog LUT + mix
@@ -366,23 +364,10 @@ begin
                 --   color = mix(horizon, zenith, t)
                 -- ══════════════════════════════════════════════════
                 when S_MISS_SKY =>
-                    -- Approximate sky: use ray_dir_y to blend
-                    -- rd_y is dir_t (Q2.16). We want t = rd_y*0.5 + 0.5
-                    v_sky_t := resize(
-                        to_sfixed(0.5, 1, -10) +
-                        mul_dd(r_dy, to_sfixed(0.5, 1, -16)),
-                        1, -10);
-                    acc <= clamp01(v_sky_t);  -- store in acc to break multiplier chain
-                    state <= S_MISS_SKY_2;
-
-                when S_MISS_SKY_2 =>
-                    col_r <= resize(SKY_HOR_R - mul_cc(acc,
-                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
-                    col_g <= resize(SKY_HOR_G - mul_cc(acc,
-                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
-                    col_b <= resize(SKY_HOR_B + mul_cc(acc,
-                                resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
-
+                    -- Flat sky to remove banding issues
+                    col_r <= SKY_ZEN_R;
+                    col_g <= SKY_ZEN_G;
+                    col_b <= SKY_ZEN_B;
                     state <= S_GAMMA_PACK;
 
                 -- ══════════════════════════════════════════════════
@@ -517,28 +502,10 @@ begin
                 -- refl_y ≈ rd_y + 2 * NoV * N_y
                 -- ══════════════════════════════════════════════════
                 when S_REFLECT_SKY =>
-                    -- Reflected ray y component
-                    v_tmp := resize(
-                        mul_cc(nov, resize(r_ny, 1, -10)),
-                        1, -10);
-                    -- refl_y ≈ rd_y + 2*NoV*ny
-                    v_sky_t := resize(
-                        to_sfixed(0.5, 1, -10) +
-                        resize(r_dy, 1, -10) +
-                        v_tmp + v_tmp,
-                        1, -10);
-                    acc <= clamp01(v_sky_t);  -- break multiplier chain
-                    state <= S_REFLECT_SKY_2;
-
-                when S_REFLECT_SKY_2 =>
-                    -- Sky reflection color from gradient
-                    sky_r <= resize(SKY_HOR_R - mul_cc(acc,
-                                resize(SKY_HOR_R - SKY_ZEN_R, 1, -10)), 1, -10);
-                    sky_g <= resize(SKY_HOR_G - mul_cc(acc,
-                                resize(SKY_HOR_G - SKY_ZEN_G, 1, -10)), 1, -10);
-                    sky_b <= resize(SKY_HOR_B + mul_cc(acc,
-                                resize(SKY_ZEN_B - SKY_HOR_B, 1, -10)), 1, -10);
-
+                    -- Flat sky reflection to match flat sky
+                    sky_r <= SKY_ZEN_R;
+                    sky_g <= SKY_ZEN_G;
+                    sky_b <= SKY_ZEN_B;
                     state <= S_MIX_REFL;
 
                 -- ══════════════════════════════════════════════════
