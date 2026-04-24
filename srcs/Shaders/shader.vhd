@@ -119,12 +119,27 @@ architecture rtl of shader is
     constant GND_AMB_G : col_t := to_sfixed(0.066, 1, -10);
     constant GND_AMB_B : col_t := to_sfixed(0.126, 1, -10);
 
-    -- Sphere base color (vibrant blue)
-    constant SPH_BASE_R : col_t := to_sfixed(0.10, 1, -10);
-    constant SPH_BASE_G : col_t := to_sfixed(0.40, 1, -10);
-    constant SPH_BASE_B : col_t := to_sfixed(0.90, 1, -10);
+    -- Sphere 0 base color: Red
+    constant SPH0_BASE_R : col_t := to_sfixed(0.90, 1, -10);
+    constant SPH0_BASE_G : col_t := to_sfixed(0.15, 1, -10);
+    constant SPH0_BASE_B : col_t := to_sfixed(0.10, 1, -10);
 
-    -- Sphere ambient ([0.10, 0.16, 0.40] * 0.45)
+    -- Sphere 1 base color: Green
+    constant SPH1_BASE_R : col_t := to_sfixed(0.10, 1, -10);
+    constant SPH1_BASE_G : col_t := to_sfixed(0.80, 1, -10);
+    constant SPH1_BASE_B : col_t := to_sfixed(0.20, 1, -10);
+
+    -- Sphere 2 base color: Blue
+    constant SPH2_BASE_R : col_t := to_sfixed(0.10, 1, -10);
+    constant SPH2_BASE_G : col_t := to_sfixed(0.40, 1, -10);
+    constant SPH2_BASE_B : col_t := to_sfixed(0.90, 1, -10);
+
+    -- Sphere 3 base color: Orange
+    constant SPH3_BASE_R : col_t := to_sfixed(0.95, 1, -10);
+    constant SPH3_BASE_G : col_t := to_sfixed(0.55, 1, -10);
+    constant SPH3_BASE_B : col_t := to_sfixed(0.10, 1, -10);
+
+    -- Sphere ambient ([0.10, 0.16, 0.40] * 0.45) — shared across all spheres
     constant SPH_AMB_R : col_t := to_sfixed(0.045, 1, -10);
     constant SPH_AMB_G : col_t := to_sfixed(0.072, 1, -10);
     constant SPH_AMB_B : col_t := to_sfixed(0.180, 1, -10);
@@ -399,33 +414,50 @@ begin
                 -- Sphere: constant deep blue
                 -- ══════════════════════════════════════════════════
                 when S_MATERIAL =>
-                    if r_mat = "000" then
-                        -- Ground: checkerboard
-                        -- Python: (floor(px) + floor(pz)) & 1
-                        -- FPGA: XOR of sign+integer bits
-                        -- hit_pos_x is sfixed(5 downto -12)
-                        -- Integer part is bits 5 downto 0 (the part above the binary point)
-                        -- floor() for negative: sfixed already truncates toward -inf
-                        -- We take bit 0 of the integer part of x XOR bit 0 of integer part of z
-                        v_checker := r_hx(0) xor r_hz(0);
+                    case r_mat is
+                        when "000" =>
+                            -- Ground: checkerboard
+                            -- Python: (floor(px) + floor(pz)) & 1
+                            -- FPGA: XOR of sign+integer bits
+                            v_checker := r_hx(0) xor r_hz(0);
 
-                        if v_checker = '1' then
-                            -- Dark tile: 0.05
-                            base_r <= to_sfixed(0.05, 1, -10);
-                            base_g <= to_sfixed(0.05, 1, -10);
-                            base_b <= to_sfixed(0.05, 1, -10);
-                        else
-                            -- Light tile: 0.95
-                            base_r <= to_sfixed(0.95, 1, -10);
-                            base_g <= to_sfixed(0.95, 1, -10);
-                            base_b <= to_sfixed(0.95, 1, -10);
-                        end if;
-                    else
-                        -- Sphere: deep blue metallic
-                        base_r <= SPH_BASE_R;
-                        base_g <= SPH_BASE_G;
-                        base_b <= SPH_BASE_B;
-                    end if;
+                            if v_checker = '1' then
+                                -- Dark tile: 0.05
+                                base_r <= to_sfixed(0.05, 1, -10);
+                                base_g <= to_sfixed(0.05, 1, -10);
+                                base_b <= to_sfixed(0.05, 1, -10);
+                            else
+                                -- Light tile: 0.95
+                                base_r <= to_sfixed(0.95, 1, -10);
+                                base_g <= to_sfixed(0.95, 1, -10);
+                                base_b <= to_sfixed(0.95, 1, -10);
+                            end if;
+                        when "001" =>
+                            -- Sphere 0: Red
+                            base_r <= SPH0_BASE_R;
+                            base_g <= SPH0_BASE_G;
+                            base_b <= SPH0_BASE_B;
+                        when "010" =>
+                            -- Sphere 1: Green
+                            base_r <= SPH1_BASE_R;
+                            base_g <= SPH1_BASE_G;
+                            base_b <= SPH1_BASE_B;
+                        when "011" =>
+                            -- Sphere 2: Blue
+                            base_r <= SPH2_BASE_R;
+                            base_g <= SPH2_BASE_G;
+                            base_b <= SPH2_BASE_B;
+                        when "100" =>
+                            -- Sphere 3: Orange
+                            base_r <= SPH3_BASE_R;
+                            base_g <= SPH3_BASE_G;
+                            base_b <= SPH3_BASE_B;
+                        when others =>
+                            -- Fallback: white
+                            base_r <= to_sfixed(0.90, 1, -10);
+                            base_g <= to_sfixed(0.90, 1, -10);
+                            base_b <= to_sfixed(0.90, 1, -10);
+                    end case;
                     state <= S_LIGHT_MUL;
 
                 -- ══════════════════════════════════════════════════

@@ -2,8 +2,9 @@
 -- raymarch.vhd — Sphere-marching engine
 --
 -- Iteratively steps along a ray, evaluating the scene SDF at each point.
--- Scene: sphere + ground plane.
+-- Scene: 4 spheres + ground plane.
 -- Uses invsqrt for sphere-distance calculation.
+-- Spheres are evaluated sequentially (one invsqrt unit reused).
 -- ============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -80,12 +81,13 @@ architecture Behavioral of raymarch is
     function sdf_plane(py : pos_t) return pos_t is
     begin return resize(py + PLANE_HEIGHT, 5, -12); end function;
 
-    function sum_of_sq(px, py, pz : pos_t) return sos_t is
+    -- Sum-of-squares for a specific sphere index
+    function sum_of_sq(px, py, pz : pos_t; idx : integer) return sos_t is
         variable dx, dy, dz : pos_t;
     begin
-        dx := resize(px - SPHERE_CX, 5, -12);
-        dy := resize(py - SPHERE_CY, 5, -12);
-        dz := resize(pz - SPHERE_CZ, 5, -12);
+        dx := resize(px - SPHERE_CX(idx), 5, -12);
+        dy := resize(py - SPHERE_CY(idx), 5, -12);
+        dz := resize(pz - SPHERE_CZ(idx), 5, -12);
         return resize(dx*dx + dy*dy + dz*dz, 11, -6);
     end function;
 
@@ -93,13 +95,22 @@ architecture Behavioral of raymarch is
     -- STATE MACHINE
     -- ─────────────────────────────────────────────────────────
     type state_t is (IDLE, INIT, COMPUTE_SOS, WAIT_INVSQRT,
-                     EVAL_SDF, CHECK_HIT, OUTPUT_RESULT);
+                     STORE_SPHERE, EVAL_SDF, CHECK_HIT, OUTPUT_RESULT);
     signal state : state_t := IDLE;
 
     -- Current march point & total distance
     signal curr_x, curr_y, curr_z : pos_t := (others => '0');
     signal t          : pos_t := (others => '0');
     signal step_count : unsigned(5 downto 0) := (others => '0');
+
+    -- Sphere iteration index (0 to NUM_SPHERES-1)
+    signal sphere_idx : integer range 0 to NUM_SPHERES-1 := 0;
+
+    -- Best (minimum) sphere distance and its index
+    signal best_sphere_d : pos_t := (others => '0');
+    signal best_sphere_id : integer range 0 to NUM_SPHERES-1 := 0;
+    -- Best sphere normal (saved when we find a closer sphere)
+    signal best_norm_x, best_norm_y, best_norm_z : dir_t := (others => '0');
 
     -- Invsqrt interface
     signal invsqrt_start  : std_logic := '0';
@@ -119,11 +130,11 @@ architecture Behavioral of raymarch is
     signal hit_reg : std_logic            := '0';
     signal obj_reg : unsigned(2 downto 0) := (others => '0');
 
-    -- Sphere normal (computed in WAIT_INVSQRT, valid at hit)
+    -- Current sphere normal (computed in WAIT_INVSQRT for current sphere)
     signal norm_sphere_x, norm_sphere_y, norm_sphere_z : dir_t := (others => '0');
 
-    -- Range-reduction flag
-    signal scaled : std_logic := '0';
+    -- Range-reduction shift amount (00=unscaled, 01=÷4, 11=÷64)
+    signal scale_shift : unsigned(1 downto 0) := "00";
 
 begin
 
@@ -141,6 +152,7 @@ begin
     process(clk)
         variable v_sq  : sos_t;
         variable v_inv : inv_t;
+        variable v_d   : pos_t;
     begin
         if rising_edge(clk) then
             if rst = '1' then
@@ -171,28 +183,49 @@ begin
                     step_count <= (others => '0');
                     hit_reg    <= '0';
                     state      <= COMPUTE_SOS;
+                    -- Initialize sphere iteration
+                    sphere_idx    <= 0;
+                    best_sphere_d <= FAR_SPHERE;
+                    best_sphere_id <= 0;
+                    -- Compute ground plane distance (constant across spheres)
+                    -- Will be latched in first COMPUTE_SOS
 
                 -- ── COMPUTE_SOS ──────────────────────────────
+                -- Compute sum-of-squares for current sphere_idx
                 when COMPUTE_SOS =>
-                    v_sq    := sum_of_sq(curr_x, curr_y, curr_z);
-                    d_plane <= sdf_plane(curr_y);
+                    v_sq    := sum_of_sq(curr_x, curr_y, curr_z, sphere_idx);
                     sum_sq  <= v_sq;
 
+                    -- Compute plane distance on first sphere iteration
+                    if sphere_idx = 0 then
+                        d_plane <= sdf_plane(curr_y);
+                        -- Reset best sphere tracking
+                        best_sphere_d <= FAR_SPHERE;
+                    end if;
+
                     if v_sq > SOS_HI then
+                        -- Very far from this sphere: skip invsqrt entirely
                         d_sphere      <= FAR_SPHERE;
                         invsqrt_start <= '0';
-                        scaled        <= '0';
-                        state         <= EVAL_SDF;
-                    elsif v_sq > SOS_LO then
-                        -- Pass bits 8 downto -6 of v_sq directly (equals v_sq / 64) to retain all 15 fractional bits.
+                        scale_shift   <= "00";
+                        state         <= STORE_SPHERE;
+                    elsif v_sq > SOS_MED then
+                        -- Far: divide by 64, recover by shift_right(3)
                         invsqrt_hw_in <= std_logic_vector(v_sq(8 downto -6)) & "000";
                         invsqrt_start <= '1';
-                        scaled        <= '1';
+                        scale_shift   <= "11";
+                        state         <= WAIT_INVSQRT;
+                    elsif v_sq > SOS_LO then
+                        -- Medium: divide by 4, recover by shift_right(1)
+                        invsqrt_hw_in <= std_logic_vector(v_sq(4 downto -6)) & "0000000";
+                        invsqrt_start <= '1';
+                        scale_shift   <= "01";
                         state         <= WAIT_INVSQRT;
                     else
+                        -- Close: unscaled, no recovery shift needed
                         invsqrt_hw_in <= std_logic_vector(v_sq(2 downto -6)) & "000000000";
                         invsqrt_start <= '1';
-                        scaled        <= '0';
+                        scale_shift   <= "00";
                         state         <= WAIT_INVSQRT;
                     end if;
 
@@ -200,25 +233,47 @@ begin
                 when WAIT_INVSQRT =>
                     invsqrt_start <= '0';
                     if invsqrt_done = '1' then
-                        if scaled = '1' then
-                            v_inv := shift_right(invsqrt_out, 3);
-                        else
-                            v_inv := invsqrt_out;
-                        end if;
+                        case scale_shift is
+                            when "11"   => v_inv := shift_right(invsqrt_out, 3);  -- ÷64 recovery
+                            when "01"   => v_inv := shift_right(invsqrt_out, 1);  -- ÷4 recovery
+                            when others => v_inv := invsqrt_out;                  -- unscaled
+                        end case;
 
-                        d_sphere <= resize(fp_mul_sos(sum_sq, v_inv) - SPHERE_R, 5, -12);
+                        d_sphere <= resize(fp_mul_sos(sum_sq, v_inv) - SPHERE_R(sphere_idx), 5, -12);
 
-                        norm_sphere_x <= fp_mul_norm(resize(curr_x - SPHERE_CX, 5, -12), v_inv);
-                        norm_sphere_y <= fp_mul_norm(resize(curr_y - SPHERE_CY, 5, -12), v_inv);
-                        norm_sphere_z <= fp_mul_norm(resize(curr_z - SPHERE_CZ, 5, -12), v_inv);
-                        state         <= EVAL_SDF;
+                        -- Save normal for this sphere (may be overwritten if not closest)
+                        norm_sphere_x <= fp_mul_norm(resize(curr_x - SPHERE_CX(sphere_idx), 5, -12), v_inv);
+                        norm_sphere_y <= fp_mul_norm(resize(curr_y - SPHERE_CY(sphere_idx), 5, -12), v_inv);
+                        norm_sphere_z <= fp_mul_norm(resize(curr_z - SPHERE_CZ(sphere_idx), 5, -12), v_inv);
+                        state         <= STORE_SPHERE;
+                    end if;
+
+                -- ── STORE_SPHERE ─────────────────────────────
+                -- Compare this sphere's distance against best so far
+                when STORE_SPHERE =>
+                    if d_sphere < best_sphere_d then
+                        best_sphere_d  <= d_sphere;
+                        best_sphere_id <= sphere_idx;
+                        best_norm_x    <= norm_sphere_x;
+                        best_norm_y    <= norm_sphere_y;
+                        best_norm_z    <= norm_sphere_z;
+                    end if;
+
+                    -- Move to next sphere or proceed to EVAL_SDF
+                    if sphere_idx = NUM_SPHERES - 1 then
+                        state <= EVAL_SDF;
+                    else
+                        sphere_idx <= sphere_idx + 1;
+                        state      <= COMPUTE_SOS;
                     end if;
 
                 -- ── EVAL_SDF ─────────────────────────────────
+                -- Compare best sphere distance vs ground plane
                 when EVAL_SDF =>
-                    if d_sphere < d_plane then
-                        d_min   <= d_sphere;
-                        obj_reg <= "001";   -- sphere
+                    if best_sphere_d < d_plane then
+                        d_min   <= best_sphere_d;
+                        -- mat_id: sphere 0="001", 1="010", 2="011", 3="100"
+                        obj_reg <= to_unsigned(best_sphere_id + 1, 3);
                     else
                         d_min   <= d_plane;
                         obj_reg <= "000";   -- plane
@@ -242,7 +297,10 @@ begin
                         curr_z     <= resize(curr_z + fp_mul_dir(ray_dir_z, d_min), 5, -12);
                         t          <= resize(t + d_min, 5, -12);
                         step_count <= step_count + 1;
-                        state      <= COMPUTE_SOS;
+                        -- Reset sphere iteration for next march step
+                        sphere_idx    <= 0;
+                        best_sphere_d <= FAR_SPHERE;
+                        state         <= COMPUTE_SOS;
                     end if;
 
                 -- ── OUTPUT_RESULT ────────────────────────────
@@ -253,10 +311,11 @@ begin
                     hit_y  <= curr_y;
                     hit_z  <= curr_z;
                     march_t <= t;
-                    if obj_reg = "001" then
-                        norm_x <= norm_sphere_x;
-                        norm_y <= norm_sphere_y;
-                        norm_z <= norm_sphere_z;
+                    if obj_reg /= "000" then
+                        -- Sphere hit: use the best sphere's normal
+                        norm_x <= best_norm_x;
+                        norm_y <= best_norm_y;
+                        norm_z <= best_norm_z;
                     else
                         norm_x <= PLANE_NX;
                         norm_y <= PLANE_NY;

@@ -41,11 +41,35 @@ package params_pkg is
     -- ═══════════════════════════════════════════════════════════════
     -- SCENE GEOMETRY
     -- ═══════════════════════════════════════════════════════════════
-    -- Sphere center & radius
-    constant SPHERE_CX : pos_t := to_sfixed(0.0, 5, -12);
-    constant SPHERE_CY : pos_t := to_sfixed(0.5, 5, -12);
-    constant SPHERE_CZ : pos_t := to_sfixed(3.0, 5, -12);
-    constant SPHERE_R  : pos_t := to_sfixed(0.5, 5, -12);
+    -- Multiple spheres: array types and constants
+    constant NUM_SPHERES : integer := 4;
+    type sphere_pos_array is array (0 to NUM_SPHERES-1) of pos_t;
+
+    -- Sphere centers (4 spheres in a symmetric arc)
+    constant SPHERE_CX : sphere_pos_array := (
+        to_sfixed(-1.5, 5, -12),   -- Sphere 0 (Red)
+        to_sfixed(-0.5, 5, -12),   -- Sphere 1 (Green)
+        to_sfixed( 0.5, 5, -12),   -- Sphere 2 (Blue)
+        to_sfixed( 1.5, 5, -12)    -- Sphere 3 (Orange)
+    );
+    constant SPHERE_CY : sphere_pos_array := (
+        to_sfixed(0.25, 5, -12),
+        to_sfixed(0.25, 5, -12),
+        to_sfixed(0.25, 5, -12),
+        to_sfixed(0.25, 5, -12)
+    );
+    constant SPHERE_CZ : sphere_pos_array := (
+        to_sfixed(3.5, 5, -12),    -- Sphere 0 (farther)
+        to_sfixed(2.5, 5, -12),    -- Sphere 1 (closer)
+        to_sfixed(2.5, 5, -12),    -- Sphere 2 (closer)
+        to_sfixed(3.5, 5, -12)     -- Sphere 3 (farther)
+    );
+    constant SPHERE_R : sphere_pos_array := (
+        to_sfixed(0.25, 5, -12),
+        to_sfixed(0.25, 5, -12),
+        to_sfixed(0.25, 5, -12),
+        to_sfixed(0.25, 5, -12)
+    );
 
     -- Ground plane: y = 0  (sdf_plane(py) = py)
     constant PLANE_HEIGHT : pos_t := to_sfixed(0.0, 5, -12);
@@ -66,6 +90,7 @@ package params_pkg is
     -- NOTE: SOS_LO must be < 4.0 because the hw input mapping extracts
     -- bits (2 downto -6) = signed Q3.6, which overflows at 4.0
     constant SOS_LO     : sos_t := to_sfixed(  3.9, 11, -6);
+    constant SOS_MED    : sos_t := to_sfixed( 15.6, 11, -6);
     constant SOS_HI     : sos_t := to_sfixed(448.0, 11, -6);
     constant FAR_SPHERE : pos_t := to_sfixed(20.0,  5, -12);
 
@@ -73,8 +98,8 @@ package params_pkg is
     -- CAMERA DEFAULTS
     -- ═══════════════════════════════════════════════════════════════
     constant CAM_INIT_X : pos_t := to_sfixed(0.0,  5, -12);
-    constant CAM_INIT_Y : pos_t := to_sfixed(1.5,  5, -12);
-    constant CAM_INIT_Z : pos_t := to_sfixed(-5.0, 5, -12);
+    constant CAM_INIT_Y : pos_t := to_sfixed(1.0,  5, -12);
+    constant CAM_INIT_Z : pos_t := to_sfixed(-3.0, 5, -12);
     constant CAM_STEP   : pos_t := to_sfixed(0.1,  5, -12);
 
     -- ═══════════════════════════════════════════════════════════════
@@ -83,7 +108,7 @@ package params_pkg is
     constant CLK_FREQ        : integer := 100_000_000;
     constant DEBOUNCE_CYCLES : integer := CLK_FREQ / 50;   -- 20ms debounce
     constant CAM_REPEAT_CYCLES : integer := CLK_FREQ / 5;  -- 200ms repeat rate
-
+    
     -- ═══════════════════════════════════════════════════════════════
     -- UTILITY FUNCTIONS
     -- ═══════════════════════════════════════════════════════════════
