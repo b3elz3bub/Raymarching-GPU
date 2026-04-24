@@ -47,10 +47,10 @@ package params_pkg is
 
     -- Sphere centers (4 spheres in a symmetric arc)
     constant SPHERE_CX : sphere_pos_array := (
-        to_sfixed(-1.5, 5, -12),   -- Sphere 0 (Red)
-        to_sfixed(-0.5, 5, -12),   -- Sphere 1 (Green)
-        to_sfixed( 0.5, 5, -12),   -- Sphere 2 (Blue)
-        to_sfixed( 1.5, 5, -12)    -- Sphere 3 (Orange)
+        to_sfixed(-2.5, 5, -12),   -- Sphere 0 (Red)
+        to_sfixed(-0.8, 5, -12),   -- Sphere 1 (Green)
+        to_sfixed( 0.8, 5, -12),   -- Sphere 2 (Blue)
+        to_sfixed( 2.5, 5, -12)    -- Sphere 3 (Orange)
     );
     constant SPHERE_CY : sphere_pos_array := (
         to_sfixed(0.25, 5, -12),
@@ -82,7 +82,7 @@ package params_pkg is
     -- ═══════════════════════════════════════════════════════════════
     -- RAYMARCHING PARAMETERS
     -- ═══════════════════════════════════════════════════════════════
-    constant HIT_DIST       : pos_t := to_sfixed(0.003, 5, -12);
+    constant HIT_DIST       : pos_t := to_sfixed(0.001, 5, -12);
     constant MAX_DIST       : pos_t := to_sfixed(20.0,  5, -12);
     constant MAX_MARCH_STEPS : integer := 63;
 

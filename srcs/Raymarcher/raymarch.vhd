@@ -3,8 +3,7 @@
 --
 -- Iteratively steps along a ray, evaluating the scene SDF at each point.
 -- Scene: 4 spheres + ground plane.
--- Uses invsqrt for sphere-distance calculation.
--- Spheres are evaluated sequentially (one invsqrt unit reused).
+-- Uses 4 parallel invsqrt units for simultaneous sphere-distance calculation.
 -- ============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -48,7 +47,7 @@ architecture Behavioral of raymarch is
     constant ONE : pos_t := to_sfixed(1.0, 5, -12);
 
     -- ─────────────────────────────────────────────────────────
-    -- COMPONENT — invsqrt (hardware module expects Q3.15 input → Q9.9 output)
+    -- COMPONENT — invsqrt
     -- ─────────────────────────────────────────────────────────
     component invsqrt
         Port (
@@ -61,7 +60,7 @@ architecture Behavioral of raymarch is
     end component;
 
     -- ─────────────────────────────────────────────────────────
-    -- MULTIPLY FUNCTIONS (each 18×18 → single DSP block)
+    -- MULTIPLY FUNCTIONS
     -- ─────────────────────────────────────────────────────────
     function fp_mul_pos(a : pos_t; b : pos_t) return pos_t is
     begin return resize(a * b, 5, -12); end function;
@@ -81,7 +80,6 @@ architecture Behavioral of raymarch is
     function sdf_plane(py : pos_t) return pos_t is
     begin return resize(py + PLANE_HEIGHT, 5, -12); end function;
 
-    -- Sum-of-squares for a specific sphere index
     function sum_of_sq(px, py, pz : pos_t; idx : integer) return sos_t is
         variable dx, dy, dz : pos_t;
     begin
@@ -92,10 +90,21 @@ architecture Behavioral of raymarch is
     end function;
 
     -- ─────────────────────────────────────────────────────────
+    -- ARRAY TYPES for parallel sphere evaluation
+    -- ─────────────────────────────────────────────────────────
+    type sos_array_t   is array (0 to NUM_SPHERES-1) of sos_t;
+    type pos_array_t   is array (0 to NUM_SPHERES-1) of pos_t;
+    type dir_array_t   is array (0 to NUM_SPHERES-1) of dir_t;
+    type inv_array_t   is array (0 to NUM_SPHERES-1) of inv_t;
+    type slv18_array_t is array (0 to NUM_SPHERES-1) of std_logic_vector(17 downto 0);
+    type shift_array_t is array (0 to NUM_SPHERES-1) of unsigned(1 downto 0);
+    type sfx9_array_t  is array (0 to NUM_SPHERES-1) of sfixed(8 downto -9);
+
+    -- ─────────────────────────────────────────────────────────
     -- STATE MACHINE
     -- ─────────────────────────────────────────────────────────
     type state_t is (IDLE, INIT, COMPUTE_SOS, WAIT_INVSQRT,
-                     STORE_SPHERE, EVAL_SDF, CHECK_HIT, OUTPUT_RESULT);
+                     COMPUTE_DIST, EVAL_SDF, CHECK_HIT, OUTPUT_RESULT);
     signal state : state_t := IDLE;
 
     -- Current march point & total distance
@@ -103,73 +112,83 @@ architecture Behavioral of raymarch is
     signal t          : pos_t := (others => '0');
     signal step_count : unsigned(5 downto 0) := (others => '0');
 
-    -- Sphere iteration index (0 to NUM_SPHERES-1)
-    signal sphere_idx : integer range 0 to NUM_SPHERES-1 := 0;
+    -- Per-sphere invsqrt signals
+    signal invsqrt_start_arr : std_logic_vector(NUM_SPHERES-1 downto 0) := (others => '0');
+    signal invsqrt_done_arr  : std_logic_vector(NUM_SPHERES-1 downto 0);
+    signal invsqrt_hw_in_arr : slv18_array_t;
+    signal invsqrt_hw_out_arr : sfx9_array_t;
+    signal invsqrt_out_arr   : inv_array_t;
 
-    -- Best (minimum) sphere distance and its index
-    signal best_sphere_d : pos_t := (others => '0');
-    signal best_sphere_id : integer range 0 to NUM_SPHERES-1 := 0;
-    -- Best sphere normal (saved when we find a closer sphere)
-    signal best_norm_x, best_norm_y, best_norm_z : dir_t := (others => '0');
+    -- Per-sphere SDF data
+    signal sum_sq_arr      : sos_array_t;
+    signal scale_shift_arr : shift_array_t := (others => "00");
+    signal skip_arr        : std_logic_vector(NUM_SPHERES-1 downto 0) := (others => '0');
+    signal d_sphere_arr    : pos_array_t := (others => (others => '0'));
 
-    -- Invsqrt interface
-    signal invsqrt_start  : std_logic := '0';
-    signal invsqrt_in     : sos_t     := (others => '0');  -- Q12.6
-    signal invsqrt_out    : inv_t     := (others => '0');  -- Q4.14
-    signal invsqrt_done   : std_logic;
+    -- Per-sphere normals
+    signal norm_x_arr, norm_y_arr, norm_z_arr : dir_array_t := (others => (others => '0'));
 
-    -- Hardware bindings
-    signal invsqrt_hw_in  : std_logic_vector(17 downto 0);
-    signal invsqrt_hw_out : sfixed(8 downto -9);
-
-    -- SDF intermediates
-    signal d_plane, d_sphere, d_min : pos_t := (others => '0');
-    signal sum_sq : sos_t := (others => '0');
+    -- Ground plane distance
+    signal d_plane : pos_t := (others => '0');
+    signal d_min   : pos_t := (others => '0');
 
     -- Result registers
-    signal hit_reg : std_logic            := '0';
-    signal obj_reg : unsigned(2 downto 0) := (others => '0');
+    signal hit_reg  : std_logic            := '0';
+    signal obj_reg  : unsigned(2 downto 0) := (others => '0');
+    signal best_norm_x, best_norm_y, best_norm_z : dir_t := (others => '0');
 
-    -- Current sphere normal (computed in WAIT_INVSQRT for current sphere)
-    signal norm_sphere_x, norm_sphere_y, norm_sphere_z : dir_t := (others => '0');
-
-    -- Range-reduction shift amount (00=unscaled, 01=÷4, 11=÷64)
-    signal scale_shift : unsigned(1 downto 0) := "00";
+    -- All-done combinational signal
+    signal all_done : std_logic;
 
 begin
 
-    -- Format mapping: 
-    -- Hardware expects Q3.15. We pass the chosen bits directly from the FSM to preserve precision.
-    invsqrt_out   <= to_sfixed(std_logic_vector(invsqrt_hw_out(3 downto -9)) & "00000", inv_t'left, inv_t'right);
+    -- ─────────────────────────────────────────────────────────
+    -- GENERATE 4 PARALLEL INVSQRT UNITS
+    -- ─────────────────────────────────────────────────────────
+    GEN_INVSQRT: for i in 0 to NUM_SPHERES-1 generate
+        -- Output format conversion: Q9.9 → Q4.14
+        invsqrt_out_arr(i) <= to_sfixed(
+            std_logic_vector(invsqrt_hw_out_arr(i)(3 downto -9)) & "00000",
+            inv_t'left, inv_t'right);
 
-    INVSQRT_UNIT : invsqrt
-        port map (clk => clk, start => invsqrt_start,
-                  x => invsqrt_hw_in, ans => invsqrt_hw_out, done => invsqrt_done);
+        INVSQRT_I : invsqrt
+            port map (
+                clk   => clk,
+                start => invsqrt_start_arr(i),
+                x     => invsqrt_hw_in_arr(i),
+                ans   => invsqrt_hw_out_arr(i),
+                done  => invsqrt_done_arr(i)
+            );
+    end generate;
+
+    -- All spheres complete when each is either done or skipped
+    all_done <= '1' when (invsqrt_done_arr or skip_arr) = "1111" else '0';
 
     -- ─────────────────────────────────────────────────────────
     -- MAIN PROCESS
     -- ─────────────────────────────────────────────────────────
     process(clk)
-        variable v_sq  : sos_t;
-        variable v_inv : inv_t;
-        variable v_d   : pos_t;
+        variable v_sq    : sos_t;
+        variable v_inv   : inv_t;
+        variable v_min_d : pos_t;
+        variable v_min_id : integer range 0 to NUM_SPHERES-1;
     begin
         if rising_edge(clk) then
             if rst = '1' then
-                state         <= IDLE;
-                done          <= '0';
-                hit           <= '0';
-                invsqrt_start <= '0';
-                norm_x        <= (others => '0');
-                norm_y        <= (others => '0');
-                norm_z        <= (others => '0');
+                state            <= IDLE;
+                done             <= '0';
+                hit              <= '0';
+                invsqrt_start_arr <= (others => '0');
+                norm_x           <= (others => '0');
+                norm_y           <= (others => '0');
+                norm_z           <= (others => '0');
             else
                 case state is
 
                 -- ── IDLE ─────────────────────────────────────
                 when IDLE =>
-                    done          <= '0';
-                    invsqrt_start <= '0';
+                    done             <= '0';
+                    invsqrt_start_arr <= (others => '0');
                     if start = '1' then
                         state <= INIT;
                     end if;
@@ -183,100 +202,95 @@ begin
                     step_count <= (others => '0');
                     hit_reg    <= '0';
                     state      <= COMPUTE_SOS;
-                    -- Initialize sphere iteration
-                    sphere_idx    <= 0;
-                    best_sphere_d <= FAR_SPHERE;
-                    best_sphere_id <= 0;
-                    -- Compute ground plane distance (constant across spheres)
-                    -- Will be latched in first COMPUTE_SOS
 
                 -- ── COMPUTE_SOS ──────────────────────────────
-                -- Compute sum-of-squares for current sphere_idx
+                -- Compute sum-of-squares for ALL 4 spheres in parallel,
+                -- set up all 4 invsqrt inputs, compute ground plane distance.
                 when COMPUTE_SOS =>
-                    v_sq    := sum_of_sq(curr_x, curr_y, curr_z, sphere_idx);
-                    sum_sq  <= v_sq;
+                    d_plane <= sdf_plane(curr_y);
 
-                    -- Compute plane distance on first sphere iteration
-                    if sphere_idx = 0 then
-                        d_plane <= sdf_plane(curr_y);
-                        -- Reset best sphere tracking
-                        best_sphere_d <= FAR_SPHERE;
-                    end if;
+                    for i in 0 to NUM_SPHERES-1 loop
+                        v_sq := sum_of_sq(curr_x, curr_y, curr_z, i);
+                        sum_sq_arr(i) <= v_sq;
 
-                    if v_sq > SOS_HI then
-                        -- Very far from this sphere: skip invsqrt entirely
-                        d_sphere      <= FAR_SPHERE;
-                        invsqrt_start <= '0';
-                        scale_shift   <= "00";
-                        state         <= STORE_SPHERE;
-                    elsif v_sq > SOS_MED then
-                        -- Far: divide by 64, recover by shift_right(3)
-                        invsqrt_hw_in <= std_logic_vector(v_sq(8 downto -6)) & "000";
-                        invsqrt_start <= '1';
-                        scale_shift   <= "11";
-                        state         <= WAIT_INVSQRT;
-                    elsif v_sq > SOS_LO then
-                        -- Medium: divide by 4, recover by shift_right(1)
-                        invsqrt_hw_in <= std_logic_vector(v_sq(4 downto -6)) & "0000000";
-                        invsqrt_start <= '1';
-                        scale_shift   <= "01";
-                        state         <= WAIT_INVSQRT;
-                    else
-                        -- Close: unscaled, no recovery shift needed
-                        invsqrt_hw_in <= std_logic_vector(v_sq(2 downto -6)) & "000000000";
-                        invsqrt_start <= '1';
-                        scale_shift   <= "00";
-                        state         <= WAIT_INVSQRT;
-                    end if;
+                        if v_sq > SOS_HI then
+                            skip_arr(i)           <= '1';
+                            d_sphere_arr(i)       <= FAR_SPHERE;
+                            invsqrt_start_arr(i)  <= '0';
+                            scale_shift_arr(i)    <= "00";
+                        elsif v_sq > SOS_MED then
+                            invsqrt_hw_in_arr(i)  <= std_logic_vector(v_sq(8 downto -6)) & "000";
+                            invsqrt_start_arr(i)  <= '1';
+                            scale_shift_arr(i)    <= "11";
+                            skip_arr(i)           <= '0';
+                        elsif v_sq > SOS_LO then
+                            invsqrt_hw_in_arr(i)  <= std_logic_vector(v_sq(4 downto -6)) & "0000000";
+                            invsqrt_start_arr(i)  <= '1';
+                            scale_shift_arr(i)    <= "01";
+                            skip_arr(i)           <= '0';
+                        else
+                            invsqrt_hw_in_arr(i)  <= std_logic_vector(v_sq(2 downto -6)) & "000000000";
+                            invsqrt_start_arr(i)  <= '1';
+                            scale_shift_arr(i)    <= "00";
+                            skip_arr(i)           <= '0';
+                        end if;
+                    end loop;
+
+                    state <= WAIT_INVSQRT;
 
                 -- ── WAIT_INVSQRT ─────────────────────────────
+                -- Wait for all 4 invsqrt units to finish (or be skipped)
                 when WAIT_INVSQRT =>
-                    invsqrt_start <= '0';
-                    if invsqrt_done = '1' then
-                        case scale_shift is
-                            when "11"   => v_inv := shift_right(invsqrt_out, 3);  -- ÷64 recovery
-                            when "01"   => v_inv := shift_right(invsqrt_out, 1);  -- ÷4 recovery
-                            when others => v_inv := invsqrt_out;                  -- unscaled
-                        end case;
-
-                        d_sphere <= resize(fp_mul_sos(sum_sq, v_inv) - SPHERE_R(sphere_idx), 5, -12);
-
-                        -- Save normal for this sphere (may be overwritten if not closest)
-                        norm_sphere_x <= fp_mul_norm(resize(curr_x - SPHERE_CX(sphere_idx), 5, -12), v_inv);
-                        norm_sphere_y <= fp_mul_norm(resize(curr_y - SPHERE_CY(sphere_idx), 5, -12), v_inv);
-                        norm_sphere_z <= fp_mul_norm(resize(curr_z - SPHERE_CZ(sphere_idx), 5, -12), v_inv);
-                        state         <= STORE_SPHERE;
+                    invsqrt_start_arr <= (others => '0');
+                    if all_done = '1' then
+                        state <= COMPUTE_DIST;
                     end if;
 
-                -- ── STORE_SPHERE ─────────────────────────────
-                -- Compare this sphere's distance against best so far
-                when STORE_SPHERE =>
-                    if d_sphere < best_sphere_d then
-                        best_sphere_d  <= d_sphere;
-                        best_sphere_id <= sphere_idx;
-                        best_norm_x    <= norm_sphere_x;
-                        best_norm_y    <= norm_sphere_y;
-                        best_norm_z    <= norm_sphere_z;
-                    end if;
+                -- ── COMPUTE_DIST ─────────────────────────────
+                -- Compute sphere distances and normals from invsqrt results
+                when COMPUTE_DIST =>
+                    for i in 0 to NUM_SPHERES-1 loop
+                        if skip_arr(i) = '0' then
+                            case scale_shift_arr(i) is
+                                when "11"   => v_inv := shift_right(invsqrt_out_arr(i), 3);
+                                when "01"   => v_inv := shift_right(invsqrt_out_arr(i), 1);
+                                when others => v_inv := invsqrt_out_arr(i);
+                            end case;
 
-                    -- Move to next sphere or proceed to EVAL_SDF
-                    if sphere_idx = NUM_SPHERES - 1 then
-                        state <= EVAL_SDF;
-                    else
-                        sphere_idx <= sphere_idx + 1;
-                        state      <= COMPUTE_SOS;
-                    end if;
+                            d_sphere_arr(i) <= resize(
+                                fp_mul_sos(sum_sq_arr(i), v_inv) - SPHERE_R(i), 5, -12);
+
+                            norm_x_arr(i) <= fp_mul_norm(
+                                resize(curr_x - SPHERE_CX(i), 5, -12), v_inv);
+                            norm_y_arr(i) <= fp_mul_norm(
+                                resize(curr_y - SPHERE_CY(i), 5, -12), v_inv);
+                            norm_z_arr(i) <= fp_mul_norm(
+                                resize(curr_z - SPHERE_CZ(i), 5, -12), v_inv);
+                        end if;
+                    end loop;
+                    state <= EVAL_SDF;
 
                 -- ── EVAL_SDF ─────────────────────────────────
-                -- Compare best sphere distance vs ground plane
+                -- Find minimum sphere distance, compare with ground plane
                 when EVAL_SDF =>
-                    if best_sphere_d < d_plane then
-                        d_min   <= best_sphere_d;
-                        -- mat_id: sphere 0="001", 1="010", 2="011", 3="100"
-                        obj_reg <= to_unsigned(best_sphere_id + 1, 3);
+                    v_min_d  := d_sphere_arr(0);
+                    v_min_id := 0;
+                    for i in 1 to NUM_SPHERES-1 loop
+                        if d_sphere_arr(i) < v_min_d then
+                            v_min_d  := d_sphere_arr(i);
+                            v_min_id := i;
+                        end if;
+                    end loop;
+
+                    if v_min_d < d_plane then
+                        d_min   <= v_min_d;
+                        obj_reg <= to_unsigned(v_min_id + 1, 3);
+                        best_norm_x <= norm_x_arr(v_min_id);
+                        best_norm_y <= norm_y_arr(v_min_id);
+                        best_norm_z <= norm_z_arr(v_min_id);
                     else
                         d_min   <= d_plane;
-                        obj_reg <= "000";   -- plane
+                        obj_reg <= "000";
                     end if;
                     state <= CHECK_HIT;
 
@@ -285,7 +299,7 @@ begin
                     if d_min < HIT_DIST then
                         hit_reg <= '1';
                         state   <= OUTPUT_RESULT;
-                    elsif t > MAX_DIST or t < to_sfixed(0.0, 5, -12) then  -- Overflow Wrap Preventer
+                    elsif t > MAX_DIST or t < to_sfixed(0.0, 5, -12) then
                         hit_reg <= '0';
                         state   <= OUTPUT_RESULT;
                     elsif step_count = MAX_MARCH_STEPS then
@@ -297,22 +311,18 @@ begin
                         curr_z     <= resize(curr_z + fp_mul_dir(ray_dir_z, d_min), 5, -12);
                         t          <= resize(t + d_min, 5, -12);
                         step_count <= step_count + 1;
-                        -- Reset sphere iteration for next march step
-                        sphere_idx    <= 0;
-                        best_sphere_d <= FAR_SPHERE;
-                        state         <= COMPUTE_SOS;
+                        state      <= COMPUTE_SOS;
                     end if;
 
                 -- ── OUTPUT_RESULT ────────────────────────────
                 when OUTPUT_RESULT =>
-                    hit    <= hit_reg;
-                    obj_id <= obj_reg;
-                    hit_x  <= curr_x;
-                    hit_y  <= curr_y;
-                    hit_z  <= curr_z;
+                    hit     <= hit_reg;
+                    obj_id  <= obj_reg;
+                    hit_x   <= curr_x;
+                    hit_y   <= curr_y;
+                    hit_z   <= curr_z;
                     march_t <= t;
                     if obj_reg /= "000" then
-                        -- Sphere hit: use the best sphere's normal
                         norm_x <= best_norm_x;
                         norm_y <= best_norm_y;
                         norm_z <= best_norm_z;
